@@ -2,7 +2,7 @@ app:
   name: LocalMiniDrama API
   version: 1.0.0
   debug: true
-  language: en
+  language: vi
 server:
   port: 5679
   host: 0.0.0.0

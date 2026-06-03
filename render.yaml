@@ -24,3 +24,5 @@ services:
         value: /data/drama_generator.db
       - key: VIDEO_GENERATION_TIMEOUT_MINUTES
         value: 60
+      - key: GIT_LFS_SKIP_SMUDGE
+        value: "1"

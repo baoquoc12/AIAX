@@ -125,39 +125,87 @@ async function resolveVideoToLocalPath(videoUrl, baseUrl, storageRoot, tempDir, 
   }
 }
 
-/** 使用 ffmpeg concat 合并多个视频文件 */
+function probeMediaInfo(filePath) {
+  const { spawnSync } = require('child_process');
+  const ffprobeBin = getFfprobePath();
+  const result = spawnSync(ffprobeBin, [
+    '-v', 'error',
+    '-show_entries', 'format=duration:stream=index,codec_type',
+    '-of', 'json',
+    filePath,
+  ], { encoding: 'utf8', maxBuffer: 1024 * 1024 });
+  if (result.error || result.status !== 0) {
+    return { duration: 5, hasAudio: false };
+  }
+  try {
+    const data = JSON.parse(result.stdout || '{}');
+    const duration = Number(data?.format?.duration);
+    const hasAudio = Array.isArray(data?.streams) && data.streams.some((s) => s.codec_type === 'audio');
+    return {
+      duration: Number.isFinite(duration) && duration > 0 ? duration : 5,
+      hasAudio,
+    };
+  } catch (_) {
+    return { duration: 5, hasAudio: false };
+  }
+}
+
+/** 使用 ffmpeg concat filter 合并多个视频文件，并统一转码参数以兼容不同模型来源的视频 */
 function runFfmpegConcat(localPaths, outputPath, log) {
   const ffmpegBin = getFfmpegPath();
-  const isWin = process.platform === 'win32';
-  const listFile = path.join(path.dirname(outputPath), `concat_list_${Date.now()}.txt`);
-  try {
-    const lines = localPaths.map((p) => {
-      const normalized = p.replace(/\\/g, '/');
-      return `file '${normalized.replace(/'/g, "'\\''")}'`;
-    });
-    fs.writeFileSync(listFile, lines.join('\n'), 'utf8');
-    const { spawnSync } = require('child_process');
-    const args = [
-      '-f', 'concat',
-      '-safe', '0',
-      '-i', listFile,
-      '-c', 'copy',
-      '-y',
-      outputPath,
-    ];
-    const result = spawnSync(ffmpegBin, args, { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
-    if (result.error) {
-      log.warn('Video merge: ffmpeg spawn error', { error: result.error.message });
-      return false;
+  const { spawnSync } = require('child_process');
+  const args = ['-y'];
+  for (const p of localPaths) args.push('-i', p);
+
+  const filterParts = [];
+  const concatInputs = [];
+  for (let i = 0; i < localPaths.length; i++) {
+    const info = probeMediaInfo(localPaths[i]);
+    filterParts.push(
+      `[${i}:v:0]scale=1280:720:force_original_aspect_ratio=decrease,` +
+      `pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,format=yuv420p,setpts=PTS-STARTPTS[v${i}]`
+    );
+    if (info.hasAudio) {
+      filterParts.push(`[${i}:a:0]aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS[a${i}]`);
+    } else {
+      const dur = Math.max(0.1, info.duration || 5).toFixed(3);
+      filterParts.push(`anullsrc=channel_layout=stereo:sample_rate=48000,atrim=0:${dur},asetpts=PTS-STARTPTS[a${i}]`);
     }
-    if (result.status !== 0) {
-      log.warn('Video merge: ffmpeg failed', { stderr: result.stderr?.slice(-500) });
-      return false;
-    }
-    return true;
-  } finally {
-    try { if (fs.existsSync(listFile)) fs.unlinkSync(listFile); } catch (_) {}
+    concatInputs.push(`[v${i}][a${i}]`);
   }
+  filterParts.push(`${concatInputs.join('')}concat=n=${localPaths.length}:v=1:a=1[vout][aout]`);
+
+  args.push(
+    '-filter_complex', filterParts.join(';'),
+    '-map', '[vout]',
+    '-map', '[aout]',
+    '-c:v', 'libx264',
+    '-preset', 'medium',
+    '-crf', '20',
+    '-r', '24',
+    '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac',
+    '-b:a', '160k',
+    '-ar', '48000',
+    '-movflags', '+faststart',
+    outputPath
+  );
+
+  log.info('Video merge: ffmpeg concat transcode', {
+    inputs: localPaths.length,
+    output: outputPath,
+    target: '1280x720@24fps h264/aac',
+  });
+  const result = spawnSync(ffmpegBin, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  if (result.error) {
+    log.warn('Video merge: ffmpeg spawn error', { error: result.error.message });
+    return false;
+  }
+  if (result.status !== 0) {
+    log.warn('Video merge: ffmpeg failed', { stderr: result.stderr?.slice(-2000) });
+    return false;
+  }
+  return true;
 }
 
 /**

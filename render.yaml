@@ -15,7 +15,7 @@ services:
       - key: SERVER_HOST
         value: 0.0.0.0
       - key: APP_LANGUAGE
-        value: en
+        value: vi
       - key: INSECURE_TLS
         value: "false"
       - key: STORAGE_LOCAL_PATH

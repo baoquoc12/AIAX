@@ -222,7 +222,21 @@ async function processVideoMerge(db, log, mergeId, baseUrl) {
   });
 
   let mergedRelativePath = null;
-  if (localPaths.length > 0 && ffmpegAvailable && localPaths.length <= 100) {
+  if (localPaths.length >= 2 && !ffmpegAvailable) {
+    const msg = 'Không tìm thấy ffmpeg nên không thể ghép nhiều video. Hãy cài ffmpeg hoặc đặt binary vào backend-node/tools/ffmpeg.';
+    db.prepare('UPDATE video_merges SET status = ?, error_msg = ? WHERE id = ?').run('failed', msg, mergeId);
+    if (taskId) taskService.updateTaskError(db, taskId, msg);
+    log.warn('Video merge failed: missing ffmpeg for multiple clips', { merge_id: mergeId, local_video_count: localPaths.length });
+    return;
+  }
+  if (scenes.length >= 2 && localPaths.length < 2) {
+    const msg = 'Không đủ video local hợp lệ để ghép. Có thể một số URL không phải video hoặc không tải được.';
+    db.prepare('UPDATE video_merges SET status = ?, error_msg = ? WHERE id = ?').run('failed', msg, mergeId);
+    if (taskId) taskService.updateTaskError(db, taskId, msg);
+    log.warn('Video merge failed: not enough valid clips', { merge_id: mergeId, scenes_count: scenes.length, local_video_count: localPaths.length });
+    return;
+  }
+  if (localPaths.length >= 2 && ffmpegAvailable && localPaths.length <= 100) {
     const projectSubdir = storageLayout.getProjectStorageSubdir(db, r.drama_id);
     const sub = projectSubdir && String(projectSubdir).trim();
     const mergedDir = sub
@@ -237,6 +251,11 @@ async function processVideoMerge(db, log, mergeId, baseUrl) {
         ? path.join(sub, 'videos', 'merged', outputFileName).replace(/\\/g, '/')
         : path.join('videos', 'merged', outputFileName).replace(/\\/g, '/');
       log.info('Video merge completed (ffmpeg)', { merge_id: mergeId, episode_id: episodeId, output: mergedRelativePath });
+    } else {
+      const msg = 'ffmpeg ghép video thất bại. Kiểm tra codec/container của các clip nguồn hoặc log stderr.';
+      db.prepare('UPDATE video_merges SET status = ?, error_msg = ? WHERE id = ?').run('failed', msg, mergeId);
+      if (taskId) taskService.updateTaskError(db, taskId, msg);
+      return;
     }
   }
 

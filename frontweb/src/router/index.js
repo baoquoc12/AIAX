@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { applyLanguage, translateText } from '@/i18n/runtime'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -44,9 +45,13 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   if (to.meta.title) {
-    document.title = `${to.meta.title} - LocalMiniDrama`
+    document.title = translateText(`${to.meta.title} - LocalMiniDrama`)
   }
   return true
+})
+
+router.afterEach(() => {
+  queueMicrotask(applyLanguage)
 })
 
 export default router

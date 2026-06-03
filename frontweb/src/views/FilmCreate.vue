@@ -2599,6 +2599,7 @@ import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Setting, Plus, Minus, Sunny, Moon, MagicStick, Upload, Delete, Check, Loading, WarningFilled, User, Box, Picture, Film, VideoCamera, Document, InfoFilled, Refresh, ZoomIn, QuestionFilled, DocumentAdd, Expand, Fold, VideoPlay } from '@element-plus/icons-vue'
 import { useTheme } from '@/composables/useTheme'
+import { currentLanguage } from '@/i18n/runtime'
 import { useFilmStore } from '@/stores/film'
 import { useGenerationTaskStore, GEN_RESOURCE } from '@/stores/generationTaskStore'
 import { syncGeneratingSetsFromStore, buildEpisodeContext, buildExtractTaskMeta, isEpisodeExtractRunning } from '@/composables/useGenerationTaskSync'
@@ -7034,7 +7035,8 @@ function onPipelineResume() {
 }
 
 function addPipelineError(step, message) {
-  const time = new Date().toLocaleTimeString('zh-CN')
+  const locale = currentLanguage.value === 'vi' ? 'vi-VN' : 'en-US'
+  const time = new Date().toLocaleTimeString(locale)
   pipelineErrorLog.value = [...pipelineErrorLog.value, { time, step, message }]
 }
 

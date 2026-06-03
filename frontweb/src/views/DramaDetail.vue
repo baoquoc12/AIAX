@@ -560,6 +560,7 @@
 import { ref, reactive, onMounted, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { currentLanguage } from '@/i18n/runtime'
 import { ArrowLeft, VideoPlay, Plus, Delete, Sunny, Moon, PictureFilled } from '@element-plus/icons-vue'
 import EpisodeBatchImportDialog from '@/components/EpisodeBatchImportDialog.vue'
 import { useTheme } from '@/composables/useTheme'
@@ -890,7 +891,8 @@ function assetImageUrl(item) {
 
 function formatDate(val) {
   if (!val) return ''
-  return new Date(val).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+  const locale = currentLanguage.value === 'vi' ? 'vi-VN' : 'en-US'
+  return new Date(val).toLocaleDateString(locale, { year: 'numeric', month: '2-digit', day: '2-digit' })
 }
 
 async function loadDrama() {

@@ -13,17 +13,17 @@ function getLanguage(cfg) {
 function updateLanguage(cfg, log) {
   return (req, res) => {
     const lang = req.body?.language;
-    if (lang !== 'zh' && lang !== 'en') {
-      return response.badRequest(res, '语言参数错误，只支持 zh 或 en');
+    if (!['zh', 'en', 'vi'].includes(lang)) {
+      return response.badRequest(res, 'Invalid language. Only zh, en, or vi are supported');
     }
     const out = settingsService.updateLanguage(cfg, log, lang);
     if (!out.ok) return response.badRequest(res, out.error);
-    const message = lang === 'en' ? 'Language switched to English' : '语言已切换为中文';
+    const message = lang === 'vi' ? 'Language switched to Vietnamese' : lang === 'en' ? 'Language switched to English' : 'Language switched to Chinese';
     response.success(res, { message, language: lang });
   };
 }
 
-/** GET /settings/generation — 获取生成相关全局设置 */
+/** GET /settings/generation - read global generation settings */
 function getGenerationSettings(db) {
   return (req, res) => {
     const concurrency = settingsService.getGlobalSetting(db, 'pipeline_concurrency', 3);
@@ -33,21 +33,21 @@ function getGenerationSettings(db) {
   };
 }
 
-/** PUT /settings/generation — 更新生成相关全局设置 */
+/** PUT /settings/generation - update global generation settings */
 function updateGenerationSettings(db) {
   return (req, res) => {
     const { concurrency, video_concurrency } = req.body || {};
     if (concurrency !== undefined) {
       const n = Number(concurrency);
       if (!Number.isInteger(n) || n < 1 || n > 20) {
-        return response.badRequest(res, '图片并发数需为 1-20 之间的整数');
+        return response.badRequest(res, 'Image concurrency must be an integer from 1 to 20');
       }
       settingsService.setGlobalSetting(db, 'pipeline_concurrency', n);
     }
     if (video_concurrency !== undefined) {
       const n = Number(video_concurrency);
       if (!Number.isInteger(n) || n < 1 || n > 20) {
-        return response.badRequest(res, '视频并发数需为 1-20 之间的整数');
+        return response.badRequest(res, 'Video concurrency must be an integer from 1 to 20');
       }
       settingsService.setGlobalSetting(db, 'pipeline_video_concurrency', n);
     }

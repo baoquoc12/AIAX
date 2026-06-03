@@ -30,6 +30,7 @@ function inferVideoProtocol(provider) {
   if (p === 'kling' || p === 'klingai') return 'kling';
   if (p === 'jimeng_ai_api') return 'jimeng_ai_api';
   if (p === 'xai' || p === 'grok') return 'xai';
+  if (p === 'kie_ai' || p === 'kie' || p === 'kieai') return 'kie_ai';
   return 'openai';
 }
 
@@ -817,17 +818,25 @@ function buildQueryUrl(config, taskId) {
   const isDashScope = proto === 'dashscope' || p === 'dashscope';
   const isVolc = p === 'volces' || p === 'volcengine' || p === 'volc';
   const isSora = proto === 'sora';
+  let actualTaskId = String(taskId || '');
+  const isKieVeoTask = proto === 'kie_ai' && (
+    actualTaskId.startsWith('kie-veo:') ||
+    /veo/i.test(normalizeKieAiModel(getModelFromConfig(config)))
+  );
+  if (actualTaskId.startsWith('kie-veo:')) actualTaskId = actualTaskId.slice('kie-veo:'.length);
   if (isVolc) return getVolcVideoBase(config) + VOLC_VIDEO_QUERY_PATH + '/' + encodeURIComponent(taskId);
   const base = (config.base_url || '').replace(/\/$/, '');
   let defaultEp;
   if (isSora) defaultEp = '/v1/videos/{taskId}';
   else if (proto === 'xai') defaultEp = '/v1/videos/{taskId}';
+  else if (proto === 'kie_ai') defaultEp = isKieVeoTask ? '/api/v1/veo/record-info?taskId={taskId}' : '/api/v1/jobs/recordInfo?taskId={taskId}';
   else if (proto === 'veo3') defaultEp = '/v1/video/query?id={taskId}';
   else if (isDashScope) defaultEp = '/api/v1/tasks/{taskId}';
   else if (proto === 'volcengine_omni') defaultEp = '/v1/videos/generations/async/{taskId}';
   else defaultEp = '/video/task/{taskId}';
   let ep = config.query_endpoint || defaultEp;
-  ep = String(ep).replace(/\{taskId\}/gi, encodeURIComponent(taskId)).replace(/\{task_id\}/gi, encodeURIComponent(taskId)).replace(/\{id\}/gi, encodeURIComponent(taskId));
+  if (isKieVeoTask && /\/api\/v1\/jobs\/recordInfo/i.test(ep)) ep = defaultEp;
+  ep = String(ep).replace(/\{taskId\}/gi, encodeURIComponent(actualTaskId)).replace(/\{task_id\}/gi, encodeURIComponent(actualTaskId)).replace(/\{id\}/gi, encodeURIComponent(actualTaskId));
   if (!ep.startsWith('/')) ep = '/' + ep;
   return base + ep;
 }
@@ -868,6 +877,31 @@ function isPlausibleHttpVideoUrl(s) {
 
 function coerceHttpVideoUrl(s) {
   return isPlausibleHttpVideoUrl(s) ? String(s).trim() : null;
+}
+
+function pickVideoUrlFromResultJson(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const arrays = [
+      parsed.resultUrls,
+      parsed.originUrls,
+      parsed.fullResultUrls,
+      parsed.videoUrls,
+      parsed.urls,
+    ];
+    for (const arr of arrays) {
+      if (!Array.isArray(arr)) continue;
+      for (const item of arr) {
+        const url = coerceHttpVideoUrl(item);
+        if (url) return url;
+      }
+    }
+    return videoUrlFromRecord(parsed) || pickProxyVideoUrl(parsed);
+  } catch (_) {
+    const match = raw.match(/https?:\/\/[^"\\\s]+/i);
+    return match ? match[0] : null;
+  }
 }
 
 /** 轮询 JSON 中的任务状态（兼容中转 data.data.status = FAILURE） */
@@ -937,6 +971,8 @@ function videoUrlFromRecord(rec) {
     coerceHttpVideoUrl(rec.result_url) ||
     coerceHttpVideoUrl(rec.url) ||
     coerceHttpVideoUrl(rec.output_url) ||
+    pickVideoUrlFromResultJson(rec.resultJson) ||
+    pickVideoUrlFromResultJson(rec.result_json) ||
     null
   );
 }
@@ -2124,6 +2160,241 @@ async function callVeo3VideoApi(config, log, opts) {
 }
 
 /**
+ * Kie.ai video task API.
+ * Official docs currently use Bearer auth with base https://api.kie.ai.
+ * Veo endpoints use /api/v1/veo/generate; marketplace models commonly use
+ * /api/v1/jobs/createTask + /api/v1/jobs/recordInfo.
+ */
+function normalizeKieAiModel(modelName) {
+  const raw = String(modelName || '').trim();
+  const m = raw.toLowerCase();
+  const aliases = {
+    'seedance-2.0': 'bytedance/seedance-2',
+    'seedance-2': 'bytedance/seedance-2',
+    'seedance2': 'bytedance/seedance-2',
+    'seedance-2.0-fast': 'bytedance/seedance-2-fast',
+    'seedance-2-fast': 'bytedance/seedance-2-fast',
+    'seedance-fast': 'bytedance/seedance-2-fast',
+    'seedance-1.5-pro': 'bytedance/seedance-1.5-pro',
+    'seedance-1-5-pro': 'bytedance/seedance-1.5-pro',
+    'wan2.7-t2v': 'wan/wan-2.7-t2v',
+  };
+  if (aliases[m]) return aliases[m];
+  if (m.startsWith('bytedance/')) return raw;
+  if (m.startsWith('wan/')) return raw;
+  return raw || 'bytedance/seedance-2';
+}
+
+function normalizeKieAiDuration(modelName, duration) {
+  const m = String(modelName || '').toLowerCase();
+  const n = Number(duration);
+  const safe = Number.isFinite(n) && n > 0 ? Math.round(n) : 5;
+  if (m.includes('seedance-2')) return Math.min(15, Math.max(4, safe));
+  return Math.min(12, Math.max(5, safe));
+}
+
+function normalizeKieAiResolution(resolution) {
+  const r = String(resolution || '').trim().toLowerCase();
+  if (r === '480p' || r === '720p' || r === '1080p') return r;
+  return '720p';
+}
+
+function normalizeKieAiAspectRatio(aspectRatio) {
+  const s = String(aspectRatio || '')
+    .trim()
+    .replace(/\uFF1A/g, ':')
+    .replace(/[×xX＊*]/g, ':')
+    .replace(/\s+/g, '');
+  return ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'].includes(s) ? s : '16:9';
+}
+
+function normalizeKieAiVeoAspectRatio(aspectRatio) {
+  const s = String(aspectRatio || '')
+    .trim()
+    .replace(/\uFF1A/g, ':')
+    .replace(/[×xX＊*]/g, ':')
+    .replace(/\s+/g, '');
+  if (s === '9:16' || s === '16:9') return s;
+  if (String(aspectRatio || '').trim().toLowerCase() === 'auto') return 'Auto';
+  return '16:9';
+}
+
+function cleanKieAiVeoPrompt(prompt) {
+  return String(prompt || '')
+    .replace(/^\s*=+\s*VideoRatio\s*:\s*[^\n\r]+/gim, '')
+    .replace(/\bVideoRatio\s*:\s*(?:16:9|9:16|auto)\b/gi, '')
+    .replace(/^\s*(?:时长|duration)\s*[：:]\s*\d+\s*(?:秒|s)?\s*[。.]?\s*$/gim, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function buildKieAiVeoMode(modelName, requestedAspectRatio, imageCount) {
+  if (imageCount <= 0) return { generationType: 'TEXT_2_VIDEO', maxImages: 0, aspectRatio: requestedAspectRatio };
+  const isFast = String(modelName || '').toLowerCase() === 'veo3_fast';
+  if (isFast && requestedAspectRatio === '16:9') {
+    return { generationType: 'REFERENCE_2_VIDEO', maxImages: 3, aspectRatio: '16:9' };
+  }
+  return { generationType: 'FIRST_AND_LAST_FRAMES_2_VIDEO', maxImages: 2, aspectRatio: requestedAspectRatio };
+}
+
+function pickKieAiVeoVideoUrl(data) {
+  const response = data?.data?.response || data?.response || {};
+  const candidates = [
+    response.resultUrls,
+    response.originUrls,
+    response.fullResultUrls,
+    data?.data?.resultUrls,
+    data?.resultUrls,
+  ];
+  for (const arr of candidates) {
+    if (!Array.isArray(arr)) continue;
+    for (const item of arr) {
+      const url = coerceHttpVideoUrl(item);
+      if (url) return url;
+    }
+  }
+  return null;
+}
+
+async function callKieAiVideoApi(config, log, opts) {
+  const { prompt, model, duration, aspect_ratio, resolution, image_url, first_frame_url, last_frame_url, reference_urls, voice_reference_url, storage_local_path, video_gen_id } = opts;
+  const base = (config.base_url || 'https://api.kie.ai').replace(/\/$/, '');
+  const modelName = normalizeKieAiModel(model || 'bytedance/seedance-2');
+  const isVeo = /veo/i.test(modelName);
+  let ep = config.endpoint || (isVeo ? '/api/v1/veo/generate' : '/api/v1/jobs/createTask');
+  if (isVeo && /\/api\/v1\/jobs\/createTask$/i.test(ep)) ep = '/api/v1/veo/generate';
+  if (!ep.startsWith('/')) ep = '/' + ep;
+  const url = base + ep;
+
+  const rawRefs = [];
+  const primary = (first_frame_url || image_url || '').trim();
+  if (primary) rawRefs.push(primary);
+  const lastFrame = (last_frame_url || '').trim();
+  if (lastFrame && !rawRefs.includes(lastFrame)) rawRefs.push(lastFrame);
+  if (Array.isArray(reference_urls)) {
+    for (const ref of reference_urls) {
+      const s = String(ref || '').trim();
+      if (s && !rawRefs.includes(s)) rawRefs.push(s);
+    }
+  }
+
+  const imageUrls = [];
+  for (let i = 0; i < rawRefs.length && imageUrls.length < 9; i++) {
+    const resolved = await resolveVeo3ImageForApi(rawRefs[i], storage_local_path, log, `kie_${video_gen_id}_${i}`);
+    let publicUrl = resolved?.value || '';
+    if (resolved?.kind === 'data') {
+      log.warn('[Kie.ai] 参考图无法转为公网 URL，KIE 不支持拉取 data URL，已跳过该图', {
+        video_gen_id,
+        index: i,
+        raw_head: String(rawRefs[i]).slice(0, 96),
+      });
+      publicUrl = '';
+    }
+    if (publicUrl) imageUrls.push(publicUrl);
+  }
+
+  let body;
+  if (isVeo) {
+    const veoAspectRatio = normalizeKieAiVeoAspectRatio(aspect_ratio);
+    const veoMode = buildKieAiVeoMode(modelName, veoAspectRatio, imageUrls.length);
+    body = {
+      prompt: cleanKieAiVeoPrompt(prompt),
+      imageUrls: imageUrls.slice(0, veoMode.maxImages),
+      model: modelName,
+      aspectRatio: veoMode.aspectRatio,
+      enableTranslation: true,
+      generationType: veoMode.generationType,
+    };
+    if (body.imageUrls.length === 0) delete body.imageUrls;
+    log.info('[Kie.ai][Veo] normalized request mode', {
+      video_gen_id,
+      model: modelName,
+      generationType: body.generationType,
+      aspectRatio: body.aspectRatio,
+      input_image_count: imageUrls.length,
+      sent_image_count: body.imageUrls ? body.imageUrls.length : 0,
+      prompt_len_before: String(prompt || '').length,
+      prompt_len_after: body.prompt.length,
+    });
+  } else {
+    body = {
+        model: modelName,
+        input: {
+          prompt: String(prompt || '').trim(),
+          reference_image_urls: imageUrls,
+          reference_audio_urls: voice_reference_url ? [String(voice_reference_url).trim()].filter(Boolean) : [],
+          generate_audio: true,
+          resolution: normalizeKieAiResolution(resolution),
+          aspect_ratio: normalizeKieAiAspectRatio(aspect_ratio),
+          duration: normalizeKieAiDuration(modelName, duration),
+          web_search: false,
+          nsfw_checker: true,
+        },
+      };
+  }
+
+  Object.keys(body).forEach((k) => body[k] === undefined && delete body[k]);
+  if (body.input) {
+    Object.keys(body.input).forEach((k) => {
+      if (body.input[k] === undefined || body.input[k] === null) delete body.input[k];
+      if (Array.isArray(body.input[k]) && body.input[k].length === 0) delete body.input[k];
+    });
+  }
+
+  log.info('[Kie.ai] Video API request', {
+    url,
+    model: modelName,
+    input_keys: body.input ? Object.keys(body.input) : [],
+    ref_count: imageUrls.length,
+    prompt_len: (prompt || '').length,
+    video_gen_id,
+  });
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer ' + (config.api_key || ''),
+    },
+    body: JSON.stringify(body),
+  });
+  const raw = await res.text();
+  log.info('[Kie.ai] raw response', { status: res.status, raw: raw.slice(0, 1000), video_gen_id });
+
+  if (!res.ok) {
+    let errMsg = 'Kie.ai request failed: ' + res.status;
+    try {
+      const errJson = JSON.parse(raw);
+      const msg = errJson.msg || errJson.message || errJson.error?.message || errJson.error;
+      if (msg) errMsg += ' - ' + (typeof msg === 'string' ? msg : JSON.stringify(msg).slice(0, 200));
+    } catch (_) {
+      if (raw) errMsg += ' - ' + raw.slice(0, 200);
+    }
+    return { error: errMsg };
+  }
+
+  let data;
+  try { data = JSON.parse(raw); } catch (e) {
+    return { error: 'Kie.ai bad response: ' + e.message + ' | raw: ' + raw.slice(0, 200) };
+  }
+
+  if (data.code != null && Number(data.code) !== 200 && Number(data.code) !== 0) {
+    return { error: String(data.msg || data.message || `Kie.ai code ${data.code}`).slice(0, 500) };
+  }
+
+  const videoUrl = pickProxyVideoUrl(data);
+  if (videoUrl) return { video_url: videoUrl };
+
+  const taskId =
+    data.taskId || data.task_id || data.id ||
+    data.data?.taskId || data.data?.task_id || data.data?.id ||
+    data.result?.taskId || data.result?.task_id;
+  if (taskId) return { task_id: isVeo ? `kie-veo:${taskId}` : String(taskId), status: data.status || data.data?.status || 'processing' };
+
+  return { error: 'Kie.ai no task_id or video_url: ' + JSON.stringify(data).slice(0, 300) };
+}
+
+/**
  * Sora (api_protocol = 'sora')
  * multipart/form-data: model, prompt, seconds, size, input_reference
  */
@@ -3022,6 +3293,7 @@ async function callVideoApi(db, log, opts) {
       reference_urls: opts.reference_urls,
       files_base_url: opts.files_base_url,
       storage_local_path: opts.storage_local_path,
+      voice_reference_url: opts.voice_reference_url,
       video_gen_id: opts.video_gen_id,
     });
   }
@@ -3034,9 +3306,12 @@ async function callVideoApi(db, log, opts) {
       aspect_ratio,
       resolution: opts.resolution,
       image_url: opts.image_url,
+      first_frame_url: opts.first_frame_url,
+      last_frame_url: opts.last_frame_url,
       reference_urls: opts.reference_urls,
       files_base_url: opts.files_base_url,
       storage_local_path: opts.storage_local_path,
+      voice_reference_url: opts.voice_reference_url,
       video_gen_id: opts.video_gen_id,
     });
   }
@@ -3078,6 +3353,21 @@ async function callVideoApi(db, log, opts) {
       video_gen_id: opts.video_gen_id,
       files_base_url: opts.files_base_url,
       storage_local_path: opts.storage_local_path,
+    });
+  }
+
+  if (protocol === 'kie_ai') {
+    return callKieAiVideoApi(config, log, {
+      prompt,
+      model,
+      duration: opts.duration,
+      aspect_ratio,
+      resolution: opts.resolution,
+      image_url: opts.image_url,
+      reference_urls: opts.reference_urls,
+      files_base_url: opts.files_base_url,
+      storage_local_path: opts.storage_local_path,
+      video_gen_id: opts.video_gen_id,
     });
   }
 
@@ -3314,6 +3604,7 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
   const isKling = protocol === 'kling';
   const isKlingOmni = protocol === 'kling_omni' || (typeof taskId === 'string' && taskId.startsWith('omni:'));
   const isVeo3 = protocol === 'veo3';
+  const isKieAi = protocol === 'kie_ai';
   /** 轮询日志里响应体最大字符数（即梦/方舟等 JSON 可能较长）；0 表示不截断（慎用） */
   const pollLogBodyMax = (() => {
     const v = String(process.env.VIDEO_POLL_LOG_MAX || '16384').trim();
@@ -3380,6 +3671,23 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
         if (!qep.startsWith('/')) qep = '/' + qep;
         url = viduBase + qep;
         headers = { Authorization: (isOfficialVidu ? 'Token ' : 'Bearer ') + (config.api_key || '') };
+      } else if (isKieAi) {
+        const kieBase = (config.base_url || 'https://api.kie.ai').replace(/\/$/, '');
+        let actualTaskId = String(taskId || '');
+        const isKieVeoTask = actualTaskId.startsWith('kie-veo:') || /veo/i.test(normalizeKieAiModel(getModelFromConfig(config)));
+        if (actualTaskId.startsWith('kie-veo:')) actualTaskId = actualTaskId.slice('kie-veo:'.length);
+        const defaultQep = isKieVeoTask
+          ? '/api/v1/veo/record-info?taskId={taskId}'
+          : '/api/v1/jobs/recordInfo?taskId={taskId}';
+        let qep = config.query_endpoint || defaultQep;
+        if (isKieVeoTask && /\/api\/v1\/jobs\/recordInfo/i.test(qep)) qep = defaultQep;
+        qep = String(qep)
+          .replace(/\{taskId\}/gi, encodeURIComponent(actualTaskId))
+          .replace(/\{task_id\}/gi, encodeURIComponent(actualTaskId))
+          .replace(/\{id\}/gi, encodeURIComponent(actualTaskId));
+        if (!qep.startsWith('/')) qep = '/' + qep;
+        url = kieBase + qep;
+        headers = { Authorization: 'Bearer ' + (config.api_key || '') };
       } else {
         url = queryUrl();
         headers = { Authorization: 'Bearer ' + (config.api_key || '') };
@@ -3487,6 +3795,47 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
         if (status === 'succeeded' || status === 'completed' || status === 'done') {
           log.warn('[Veo3 poll] completed but no video_url', { data: JSON.stringify(data).slice(0, 500) });
           return { error: 'Veo3 completed but no video URL: ' + JSON.stringify(data).slice(0, 300) };
+        }
+        continue;
+      }
+
+      if (isKieAi) {
+        if (data.code != null && Number(data.code) !== 200 && Number(data.code) !== 0) {
+          const msg = data.msg || data.message || data.error?.message || data.error || `Kie.ai code ${data.code}`;
+          return { error: String(msg).slice(0, 500) };
+        }
+        const isKieVeoTask = String(taskId || '').startsWith('kie-veo:') || /veo/i.test(normalizeKieAiModel(getModelFromConfig(config)));
+        if (isKieVeoTask) {
+          const successFlag = data?.data?.successFlag ?? data?.successFlag;
+          const failMsg = data?.data?.errorMessage || data?.errorMessage || data?.msg || data?.message;
+          const videoUrl = pickKieAiVeoVideoUrl(data) || pickProxyVideoUrl(data);
+          log.info('[Kie.ai Veo poll] task status', {
+            video_gen_id: videoGenId,
+            attempt,
+            task_id: taskId,
+            successFlag,
+            has_url: !!videoUrl,
+          });
+          if (Number(successFlag) === 1) {
+            if (videoUrl && isPlausibleHttpVideoUrl(videoUrl)) return { video_url: videoUrl };
+            return { error: 'Kie.ai Veo completed but no video URL: ' + JSON.stringify(data).slice(0, 300) };
+          }
+          if (Number(successFlag) === 2 || Number(successFlag) === 3) {
+            return { error: String(failMsg || 'Kie.ai Veo task failed').slice(0, 500) };
+          }
+          if (videoUrl && isPlausibleHttpVideoUrl(videoUrl)) return { video_url: videoUrl };
+          continue;
+        }
+        const status = extractPollTaskStatus(data) || String(
+          data?.data?.status || data?.data?.state || data?.data?.taskStatus || data?.data?.task_status || ''
+        ).toLowerCase();
+        const failMsg = extractPollFailureMessage(data) || data?.data?.failReason || data?.data?.errorMessage || data?.msg;
+        log.info('[Kie.ai poll] task status', { video_gen_id: videoGenId, attempt, status, task_id: taskId });
+        if (isPollTaskFailed(status)) return { error: String(failMsg || 'Kie.ai task failed').slice(0, 500) };
+        const videoUrl = pickProxyVideoUrl(data);
+        if (videoUrl && isPlausibleHttpVideoUrl(videoUrl)) return { video_url: videoUrl };
+        if (status === 'succeeded' || status === 'completed' || status === 'success' || status === 'done') {
+          return { error: 'Kie.ai completed but no video URL: ' + JSON.stringify(data).slice(0, 300) };
         }
         continue;
       }

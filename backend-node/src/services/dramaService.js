@@ -748,6 +748,12 @@ function getVideoUrlForStoryboard(db, storyboardId, baseUrl) {
   return sbUrl;
 }
 
+function isObviousImageUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const clean = url.split(/[?#]/)[0].toLowerCase();
+  return /\.(png|jpe?g|webp|gif|bmp|avif)$/.test(clean);
+}
+
 function finalizeEpisode(db, log, episodeId, baseUrl, body = {}) {
   const ep = db.prepare('SELECT id, drama_id, episode_number FROM episodes WHERE id = ? AND deleted_at IS NULL').get(episodeId);
   if (!ep) return null;
@@ -762,6 +768,14 @@ function finalizeEpisode(db, log, episodeId, baseUrl, body = {}) {
     const videoUrl = getVideoUrlForStoryboard(db, sb.id, baseUrl);
     if (!videoUrl) {
       log.warn('Finalize skip storyboard (no video)', { storyboard_id: sb.id, storyboard_number: sb.storyboard_number });
+      continue;
+    }
+    if (isObviousImageUrl(videoUrl)) {
+      log.warn('Finalize skip storyboard (image URL is not a video)', {
+        storyboard_id: sb.id,
+        storyboard_number: sb.storyboard_number,
+        url: String(videoUrl).slice(0, 160),
+      });
       continue;
     }
     scenes.push({

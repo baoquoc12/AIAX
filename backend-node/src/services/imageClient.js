@@ -90,6 +90,7 @@ function getProxyExpireHours() {
  */
 function inferProtocol(provider, model) {
   const p = String(provider || '').toLowerCase();
+  if (p === 'openrouter') return 'openrouter_image';
   if (p === 'dashscope' || p === 'qwen_image') return 'dashscope';
   if (p === 'nano_banana') return 'nano_banana';
   if (p === 'gemini' || p === 'google') return 'gemini';
@@ -146,6 +147,52 @@ function getModelFromConfig(config, preferredModel) {
   if (preferredModel && models.includes(preferredModel)) return preferredModel;
   if (config.default_model && models.includes(config.default_model)) return config.default_model;
   return models[0] || 'dall-e-3';
+}
+
+function sizeToOpenRouterImageConfig(size) {
+  if (!size || typeof size !== 'string') return null;
+  const s = String(size).trim().toLowerCase().replace(/x/g, '*');
+  const match = s.match(/^(\d+)\s*\*\s*(\d+)$/);
+  if (!match) return null;
+  const w = parseInt(match[1], 10);
+  const h = parseInt(match[2], 10);
+  if (!w || !h) return null;
+  const ratio = w / h;
+  let aspectRatio = '1:1';
+  if (ratio >= 1.9) aspectRatio = '21:9';
+  else if (ratio >= 1.6) aspectRatio = '16:9';
+  else if (ratio >= 1.25) aspectRatio = '4:3';
+  else if (ratio >= 0.9) aspectRatio = '1:1';
+  else if (ratio >= 0.7) aspectRatio = '3:4';
+  else if (ratio >= 0.5) aspectRatio = '9:16';
+  return { aspect_ratio: aspectRatio };
+}
+
+function pickOpenRouterImageUrl(data) {
+  const firstChoice = Array.isArray(data?.choices) ? data.choices[0] : null;
+  const message = firstChoice?.message || {};
+  const images = Array.isArray(message.images) ? message.images : [];
+  for (const img of images) {
+    const url = img?.image_url?.url || img?.imageUrl?.url || img?.url;
+    if (url) return url;
+  }
+
+  const item = Array.isArray(data?.data) ? data.data[0] : null;
+  if (item?.url || item?.image_url) return item.url || item.image_url;
+  if (item?.b64_json) return `data:image/png;base64,${String(item.b64_json).replace(/\s/g, '')}`;
+
+  const content = message?.content;
+  const text = typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content.map((part) => part?.text || part?.image_url?.url || part?.imageUrl?.url || '').join('\n')
+      : '';
+  const dataUrlMatch = text.match(/data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+/);
+  if (dataUrlMatch) return dataUrlMatch[0].replace(/\s/g, '');
+  const markdownUrlMatch = text.match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/);
+  if (markdownUrlMatch) return markdownUrlMatch[1];
+  const plainUrlMatch = text.match(/https?:\/\/\S+\.(?:png|jpe?g|webp|gif)(?:\?\S*)?/i);
+  return plainUrlMatch ? plainUrlMatch[0] : null;
 }
 
 // 通义万象 size：格式 "宽*高"，总像素须在 589824(768*768)～1638400(1280*1280) 之间
@@ -1418,6 +1465,18 @@ async function callImageApi(db, log, opts) {
     });
   }
 
+  if (protocol === 'openrouter_image') {
+    return callOpenRouterImageApi(config, log, {
+      prompt: effectivePrompt,
+      model,
+      size,
+      image_gen_id,
+      reference_image_urls: opts.reference_image_urls,
+      files_base_url: opts.files_base_url,
+      storage_local_path: opts.storage_local_path,
+    });
+  }
+
   const url = buildImageUrl(config);
   const isVolc = protocol === 'volcengine';
   // doubao-seedream 系列模型（含通过自定义代理使用的场景）：使用 volcengine 图片 API 规范
@@ -1510,6 +1569,104 @@ async function callImageApi(db, log, opts) {
       first_item_keys: (data.data && data.data[0]) ? Object.keys(data.data[0]) : [],
     });
     return { error: '未返回图片地址' };
+  }
+  return { image_url: imageUrl };
+}
+
+async function callOpenRouterImageApi(config, log, opts) {
+  const {
+    prompt,
+    model,
+    size,
+    image_gen_id,
+    reference_image_urls,
+    files_base_url,
+    storage_local_path,
+  } = opts;
+  const base = (config.base_url || 'https://openrouter.ai/api/v1').replace(/\/$/, '');
+  let ep = config.endpoint || '/chat/completions';
+  if (!ep.startsWith('/')) ep = '/' + ep;
+  const url = base + ep;
+
+  const rawRefs = Array.isArray(reference_image_urls) ? reference_image_urls.filter(Boolean) : [];
+  const resolvedRefs = rawRefs
+    .map((r) => resolveImageRef(r, files_base_url, storage_local_path))
+    .filter(Boolean);
+  const content = resolvedRefs.length > 0
+    ? [
+        { type: 'text', text: prompt || '' },
+        ...resolvedRefs.map((r) => ({ type: 'image_url', image_url: { url: r } })),
+      ]
+    : (prompt || '');
+  const body = {
+    model,
+    messages: [{ role: 'user', content }],
+    modalities: ['image', 'text'],
+    stream: false,
+  };
+  const imageConfig = sizeToOpenRouterImageConfig(size);
+  if (imageConfig) body.image_config = imageConfig;
+
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer ' + (config.api_key || ''),
+  };
+  if (config.settings && typeof config.settings === 'object') {
+    const referer = config.settings.http_referer || config.settings.referer;
+    const title = config.settings.app_title || config.settings.title;
+    if (referer) headers['HTTP-Referer'] = String(referer);
+    if (title) headers['X-Title'] = String(title);
+  }
+
+  log.info('OpenRouter image request', {
+    image_gen_id,
+    url: url.slice(0, 80),
+    model,
+    size,
+    ref_count: resolvedRefs.length,
+    image_config: imageConfig || undefined,
+  });
+
+  let raw;
+  let httpStatus;
+  try {
+    const out = await postJSONWithTimeout(url, headers, body, IMAGE_HTTP_TIMEOUT_MS);
+    httpStatus = out.statusCode;
+    raw = out.raw;
+  } catch (e) {
+    log.error('OpenRouter image network error', { image_gen_id, error: e.message, url: url.slice(0, 80) });
+    return { error: e.message && e.message.includes('timeout')
+      ? e.message
+      : ('OpenRouter 图片生成网络请求失败: ' + e.message) };
+  }
+  if (httpStatus < 200 || httpStatus >= 300) {
+    log.error('OpenRouter image failed', { status: httpStatus, body: raw.slice(0, 300) });
+    let errMsg = 'OpenRouter 图片生成请求失败: ' + httpStatus;
+    try {
+      const errJson = JSON.parse(raw);
+      const msg = errJson.error?.message || errJson.message || errJson.error;
+      if (msg) errMsg += ' - ' + (typeof msg === 'string' ? msg : JSON.stringify(msg).slice(0, 200));
+    } catch (_) {
+      if (raw && raw.length) errMsg += ' - ' + raw.slice(0, 200);
+    }
+    return { error: errMsg };
+  }
+
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (e) {
+    log.warn('OpenRouter image response parse error', { image_gen_id, raw_preview: raw.slice(0, 200) });
+    return { error: 'OpenRouter 图片生成返回格式异常' };
+  }
+  const imageUrl = pickOpenRouterImageUrl(data);
+  if (!imageUrl) {
+    log.warn('OpenRouter image response has no image URL', {
+      image_gen_id,
+      response_keys: data ? Object.keys(data) : [],
+      data_preview: data ? JSON.stringify(data).slice(0, 500) : '',
+    });
+    return { error: 'OpenRouter 未返回图片地址，请确认模型支持 image output modality' };
   }
   return { image_url: imageUrl };
 }

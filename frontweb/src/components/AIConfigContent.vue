@@ -322,11 +322,13 @@
             <el-option label="火山即梦 Seedance 全能（方舟多图参考，Seedance 2.0 等）" value="volcengine_omni" />
             <el-option label="通义万象 DashScope" value="dashscope" />
             <el-option label="Google Gemini（图片 / Veo 视频）" value="gemini" />
+            <el-option label="OpenRouter 图片生成（Chat Completions + modalities）" value="openrouter_image" />
             <el-option label="Sora 中转站（multipart/form-data，seconds+size）" value="sora" />
             <el-option label="Veo3 兼容（JSON，images+enhance_prompt，自动翻译英文）" value="veo3" />
             <el-option label="Vidu 视频" value="vidu" />
             <el-option label="可灵 Omni-Video（官方 api-beijing / ffir 中转，O1 全能）" value="kling_omni" />
             <el-option label="xAI Grok Imagine（官方 prompt + aspect_ratio，/v1/videos/generations）" value="xai" />
+            <el-option label="Kie.ai 视频任务（Bearer，createTask/recordInfo）" value="kie_ai" />
             <el-option label="NanoBanana" value="nano_banana" />
           </el-select>
         </el-form-item>
@@ -1239,6 +1241,7 @@ const oneKeyVolcSaving = ref(false)
 const providerConfigs = {
   text: [
     { id: 'openai', name: 'OpenAI', models: ['gpt-4o', 'gpt-4', 'gpt-3.5-turbo'] },
+    { id: 'openrouter', name: 'OpenRouter', models: ['openai/gpt-4o', 'anthropic/claude-sonnet-4', 'google/gemini-2.5-pro', 'deepseek/deepseek-chat', 'meta-llama/llama-3.1-70b-instruct'] },
     { id: 'volcengine', name: '火山引擎', models: ['deepseek-v3-2-251201', 'doubao-1-5-pro-32k-250115', 'kimi-k2-thinking-251104'] },
     // { id: 'chatfire', name: 'Chatfire', models: ['gemini-3-flash-preview', 'claude-sonnet-4-5-20250929', 'doubao-seed-1-8-251228'] },
     { id: 'gemini', name: 'Google Gemini', models: ['gemini-2.5-pro', 'gemini-3-flash-preview'] },
@@ -1246,6 +1249,7 @@ const providerConfigs = {
     { id: 'qwen', name: '通义千问', models: ['qwen3-max', 'qwen-plus', 'qwen-flash'] }
   ],
   image: [
+    { id: 'openrouter', name: 'OpenRouter', models: ['google/gemini-2.5-flash-image', 'openai/gpt-5.4-image-2', 'openai/gpt-5-image', 'x-ai/grok-imagine-image-quality', 'recraft/recraft-v4-vector'] },
     { id: 'volcengine', name: '火山引擎', models: ['doubao-seedream-4-5-251128', 'doubao-seedream-4-0-250828'] },
     { id: 'kling', name: '可灵 Kling', models: ['kling-image', 'kling-omni-image'] },
     { id: 'nano_banana', name: 'NanoBanana', models: ['nano-banana-2', 'nano-banana-pro', 'nano-banana'] },
@@ -1256,6 +1260,7 @@ const providerConfigs = {
     { id: 'qwen_image', name: '通义千问', models: ['qwen-image-max', 'qwen-image-plus', 'qwen-image'] }
   ],
   storyboard_image: [
+    { id: 'openrouter', name: 'OpenRouter', models: ['google/gemini-2.5-flash-image', 'openai/gpt-5.4-image-2', 'openai/gpt-5-image', 'x-ai/grok-imagine-image-quality', 'recraft/recraft-v4-vector'] },
     { id: 'dashscope', name: '通义万象', models: ['wan2.6-image', 'qwen-image-edit-plus-2026-01-09', 'qwen-image-edit-plus', 'qwen-image-edit-max'] },
     { id: 'volcengine', name: '火山引擎', models: ['doubao-seedream-4-5-251128', 'doubao-seedream-4-0-250828'] },
     { id: 'kling', name: '可灵 Kling', models: ['kling-image', 'kling-omni-image'] },
@@ -1288,6 +1293,7 @@ const providerConfigs = {
     },
     { id: 'openai', name: 'OpenAI', models: ['sora-2', 'sora-2-pro'] },
     { id: 'xai', name: 'xAI Grok Imagine', models: ['grok-imagine-video'] },
+    { id: 'kie_ai', name: 'Kie.ai', models: ['bytedance/seedance-2', 'bytedance/seedance-2-fast', 'bytedance/seedance-1.5-pro', 'veo3_fast', 'veo3', 'veo3_quality', 'kling-v3', 'wan/wan-2.7-t2v'] },
   ],
   tts: [
     { id: 'minimax', name: 'MiniMax T2A', models: ['speech-02-hd', 'speech-02-turbo'] },
@@ -1315,6 +1321,7 @@ const providerProtocolMap = {
   vidu: 'vidu',
   xai: 'xai',
   grok: 'xai',
+  kie_ai: 'kie_ai',
   minimax: 'openai',
   openai: 'openai',
   chatfire: 'openai',
@@ -1332,6 +1339,7 @@ function getBaseUrlForProvider(provider) {
   if (p === 'minimax') return 'https://api.minimaxi.com/v1'
   if (p === 'volces' || p === 'volcengine') return 'https://ark.cn-beijing.volces.com/api/v3'
   if (p === 'openai') return 'https://api.openai.com/v1'
+  if (p === 'openrouter') return 'https://openrouter.ai/api/v1'
   if (p === 'deepseek') return 'https://api.deepseek.com'
   if (p === 'dashscope') return 'https://dashscope.aliyuncs.com'
   if (p === 'qwen_image') return 'https://dashscope.aliyuncs.com'
@@ -1344,6 +1352,7 @@ function getBaseUrlForProvider(provider) {
   if (p === 'jimeng_ai_api') return 'http://127.0.0.1:8000'
   if (p === 'jimeng_material_api') return 'https://silvamux.tingyutech.com'
   if (p === 'xai' || p === 'grok') return 'https://api.x.ai'
+  if (p === 'kie_ai') return 'https://api.kie.ai'
   return 'https://api.chatfire.site/v1'
 }
 
@@ -1440,6 +1449,8 @@ const endpointPreviewInfo = computed(() => {
   } else if (service_type === 'image' || service_type === 'storyboard_image') {
     if (endpoint) {
       submitPath = endpoint
+    } else if (proto === 'openrouter_image' || p === 'openrouter') {
+      submitPath = '/chat/completions'
     } else if (proto === 'volcengine' || p === 'volcengine' || p === 'volces') {
       submitPath = '/images/generations'
     } else if (proto === 'dashscope' || p === 'dashscope' || p === 'qwen_image') {
@@ -1478,6 +1489,9 @@ const endpointPreviewInfo = computed(() => {
       submitPath = '/v1/videos'
     } else if (proto === 'xai') {
       submitPath = '/v1/videos/generations'
+    } else if (proto === 'kie_ai' || p === 'kie_ai') {
+      const isKieVeo = /veo/i.test(form.value.default_model || '')
+      submitPath = isKieVeo ? '/api/v1/veo/generate' : '/api/v1/jobs/createTask'
     } else if (proto === 'veo3') {
       submitPath = '/v1/video/create'
     } else if (proto === 'jimeng_ai_api' || p === 'jimeng_ai_api') {
@@ -1513,6 +1527,9 @@ const endpointPreviewInfo = computed(() => {
       queryPath = '/v1/videos/{taskId}'
     } else if (proto === 'xai') {
       queryPath = '/v1/videos/{taskId}'
+    } else if (proto === 'kie_ai' || p === 'kie_ai') {
+      const isKieVeo = /veo/i.test(form.value.default_model || '')
+      queryPath = isKieVeo ? '/api/v1/veo/record-info?taskId={taskId}' : '/api/v1/jobs/recordInfo?taskId={taskId}'
     } else if (proto === 'veo3') {
       queryPath = '/v1/video/query?id={taskId}'
     } else if (proto === 'kling_omni' || p === 'ffir' || p === 'klingai') {
@@ -1568,7 +1585,11 @@ function onProviderChange(providerId) {
     form.value.deepseek_reasoning_effort = 'high'
   }
   // 自动填充接口规范
-  form.value.api_protocol = providerProtocolMap[providerId] || (st === 'text' ? '' : 'openai')
+  if (providerId === 'openrouter') {
+    form.value.api_protocol = st === 'text' ? '' : 'openrouter_image'
+  } else {
+    form.value.api_protocol = providerProtocolMap[providerId] || (st === 'text' ? '' : 'openai')
+  }
   if (st === 'video' && providerId === 'jimeng_ai_api') {
     form.value.endpoint = ''
     form.value.query_endpoint = ''

@@ -75,9 +75,10 @@ function createConfig(db, log, req) {
   if (!endpoint && req.provider) {
     const p = req.provider.toLowerCase();
     const st = (req.service_type || 'text').toLowerCase();
-    if (p === 'openai') {
+    if (p === 'openai' || p === 'openrouter') {
       if (st === 'text') endpoint = '/chat/completions';
-      else if (st === 'image') endpoint = '/images/generations';
+      else if (p === 'openrouter' && (st === 'image' || st === 'storyboard_image')) endpoint = '/chat/completions';
+      else if (st === 'image' || st === 'storyboard_image') endpoint = '/images/generations';
       else if (st === 'video') {
         endpoint = '/videos';
         queryEndpoint = '/videos/{taskId}';
@@ -101,6 +102,16 @@ function createConfig(db, log, req) {
       if (st === 'image' || st === 'storyboard_image') {
         endpoint = '/api/v1/nanobanana/generate-2';
         queryEndpoint = '/api/v1/nanobanana/record-info';
+      }
+    } else if (p === 'kie_ai' || p === 'kie' || p === 'kieai') {
+      if (st === 'video') {
+        const rawModel = [req.default_model, ...(Array.isArray(req.model) ? req.model : [req.model])]
+          .filter(Boolean)
+          .map((v) => String(v).toLowerCase())
+          .join('\n');
+        const isVeo = /veo/.test(rawModel);
+        endpoint = isVeo ? '/api/v1/veo/generate' : '/api/v1/jobs/createTask';
+        queryEndpoint = isVeo ? '/api/v1/veo/record-info?taskId={taskId}' : '/api/v1/jobs/recordInfo?taskId={taskId}';
       }
     }
   }

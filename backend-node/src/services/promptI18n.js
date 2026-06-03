@@ -17,11 +17,11 @@ function clearOverrideInMemory(key) {
 
 // 与 Go application/services/prompt_i18n.go 对齐：提示词与语言
 function getLanguage(cfg) {
-  return (cfg?.app?.language || 'zh').toLowerCase();
+  return (cfg?.app?.language || 'en').toLowerCase();
 }
 
 function isEnglish(cfg) {
-  return getLanguage(cfg) === 'en';
+  return getLanguage(cfg) !== 'zh';
 }
 
 /** 画风由前端写入 dramas.metadata.style_prompt_zh / style_prompt_en，mergeCfgStyleWithDrama 注入 cfg.style */

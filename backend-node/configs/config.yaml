@@ -2,7 +2,7 @@ app:
   name: LocalMiniDrama API
   version: 1.0.0
   debug: true
-  language: zh
+  language: en
 server:
   port: 5679
   host: 0.0.0.0
@@ -20,7 +20,6 @@ storage:
   type: local
   local_path: ./data/storage
   base_url: http://localhost:5679/static
-# 异步视频任务轮询总超时（分钟）；省略或 ≤0 时默认 30
 video:
   generation_timeout_minutes: 30
 ai:

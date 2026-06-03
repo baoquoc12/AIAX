@@ -202,9 +202,11 @@ async function uploadLocalImageToProxy(storagePath, localPathOrUrl, log, tag) {
         filePath = path.join(storagePath, afterStatic.replace(/^\//, ''));
       }
     } else if (localPathOrUrl && storagePath) {
-      filePath = path.isAbsolute(localPathOrUrl)
-        ? localPathOrUrl
-        : path.join(storagePath, localPathOrUrl.replace(/^\//, ''));
+      let localRef = String(localPathOrUrl).split(/[?#]/)[0];
+      if (localRef.startsWith('/static/')) localRef = localRef.slice('/static/'.length);
+      filePath = path.isAbsolute(localRef)
+        ? localRef
+        : path.join(storagePath, localRef.replace(/^\//, ''));
     }
     if (!filePath || !fs.existsSync(filePath)) {
       log.warn('[图床上传] 本地文件不存在', { tag, filePath });

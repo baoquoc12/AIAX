@@ -20,12 +20,12 @@ function setConfigPath(cfg) {
 }
 
 function getLanguage(cfg) {
-  return cfg?.app?.language || 'zh';
+  return cfg?.app?.language || 'en';
 }
 
 function updateLanguage(cfg, log, language) {
-  if (language !== 'zh' && language !== 'en') {
-    return { ok: false, error: '只支持 zh 或 en' };
+  if (!['zh', 'en', 'vi'].includes(language)) {
+    return { ok: false, error: 'Only zh, en, or vi are supported' };
   }
   if (!cfg.app) cfg.app = {};
   cfg.app.language = language;
@@ -45,7 +45,7 @@ function updateLanguage(cfg, log, language) {
 }
 
 /**
- * 从 global_settings 表读取一个键值，返回解析后的值，不存在时返回 defaultValue。
+ * Read a key from global_settings, parse its stored value, and return defaultValue when missing.
  */
 function getGlobalSetting(db, key, defaultValue = null) {
   try {
@@ -56,7 +56,7 @@ function getGlobalSetting(db, key, defaultValue = null) {
 }
 
 /**
- * 向 global_settings 表写入一个键值（value 会被 JSON.stringify）。
+ * Write a key to global_settings. Values are stored with JSON.stringify.
  */
 function setGlobalSetting(db, key, value) {
   const now = new Date().toISOString();

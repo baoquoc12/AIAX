@@ -2189,13 +2189,18 @@ function normalizeKieAiDuration(modelName, duration) {
   const m = String(modelName || '').toLowerCase();
   const n = Number(duration);
   const safe = Number.isFinite(n) && n > 0 ? Math.round(n) : 5;
+  if (m.includes('veo3')) {
+    if (safe <= 4) return 4;
+    if (safe <= 6) return 6;
+    return 8;
+  }
   if (m.includes('seedance-2')) return Math.min(15, Math.max(4, safe));
   return Math.min(12, Math.max(5, safe));
 }
 
 function normalizeKieAiResolution(resolution) {
   const r = String(resolution || '').trim().toLowerCase();
-  if (r === '480p' || r === '720p' || r === '1080p') return r;
+  if (r === '480p' || r === '720p' || r === '1080p' || r === '4k') return r;
   return '720p';
 }
 
@@ -2220,12 +2225,35 @@ function normalizeKieAiVeoAspectRatio(aspectRatio) {
 }
 
 function cleanKieAiVeoPrompt(prompt) {
-  return String(prompt || '')
+  const cleaned = String(prompt || '')
+    .replace(/场景：/g, 'Scene: ')
+    .replace(/镜头标题：/g, 'Shot title: ')
+    .replace(/动作：/g, 'Action: ')
+    .replace(/对话：/g, 'Dialogue, keep original language exactly: ')
+    .replace(/解说旁白：/g, 'Vietnamese voice-over narration: ')
+    .replace(/结果：/g, 'Result: ')
+    .replace(/景别：/g, 'Shot size: ')
+    .replace(/镜头角度：/g, 'Camera angle: ')
+    .replace(/运镜：/g, 'Camera movement: ')
+    .replace(/氛围：/g, 'Atmosphere: ')
+    .replace(/情绪强度：/g, 'Emotion intensity: ')
+    .replace(/情绪：/g, 'Emotion: ')
+    .replace(/配乐：/g, 'Music: ')
+    .replace(/音效：/g, 'Diegetic sound effects only: ')
+    .replace(/时长：\s*(\d+)\s*秒/g, 'Duration: $1 seconds')
+    .replace(/风格：/g, 'Visual style: ')
     .replace(/^\s*=+\s*VideoRatio\s*:\s*[^\n\r]+/gim, '')
     .replace(/\bVideoRatio\s*:\s*(?:16:9|9:16|auto)\b/gi, '')
     .replace(/^\s*(?:时长|duration)\s*[：:]\s*\d+\s*(?:秒|s)?\s*[。.]?\s*$/gim, '')
+    .replace(/。/g, '. ')
+    .replace(/，/g, ', ')
     .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
     .trim();
+  if (!cleaned) return cleaned;
+  const safetyNote =
+    'All people and characters in this request are fictional film characters, not real public figures, celebrities, politicians, or known persons.';
+  return `${safetyNote}\n\n${cleaned}`;
 }
 
 function buildKieAiVeoMode(modelName, requestedAspectRatio, imageCount) {
@@ -2256,10 +2284,47 @@ function pickKieAiVeoVideoUrl(data) {
   return null;
 }
 
+function parseConfigSettings(settings) {
+  if (!settings) return {};
+  if (typeof settings === 'object') return settings;
+  try {
+    const parsed = JSON.parse(settings);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function normalizeKieVeo31OptionsFromServer(input = {}) {
+  const model = normalizeKieAiModel(input.model || 'veo3_fast');
+  const aspect = normalizeKieAiVeoAspectRatio(input.aspectRatio || input.aspect_ratio || '16:9');
+  return {
+    model,
+    duration: normalizeKieAiDuration(model, input.duration || 8),
+    resolution: normalizeKieAiResolution(input.resolution || '1080p'),
+    aspectRatio: aspect,
+    enableTranslation: input.enableTranslation !== false,
+    enableFallback: input.enableFallback === true,
+    watermark: String(input.watermark || '').trim().slice(0, 200),
+    generationType: String(input.generationType || '').trim(),
+  };
+}
+
 async function callKieAiVideoApi(config, log, opts) {
   const { prompt, model, duration, aspect_ratio, resolution, image_url, first_frame_url, last_frame_url, reference_urls, voice_reference_url, storage_local_path, video_gen_id } = opts;
   const base = (config.base_url || 'https://api.kie.ai').replace(/\/$/, '');
-  const modelName = normalizeKieAiModel(model || 'bytedance/seedance-2');
+  const configSettings = parseConfigSettings(config.settings);
+  const requestParams = opts.video_params && typeof opts.video_params === 'object' ? opts.video_params : {};
+  const kieVeoDefaults = configSettings.kie_veo31 && typeof configSettings.kie_veo31 === 'object' ? configSettings.kie_veo31 : {};
+  const mergedVeoParams = normalizeKieVeo31OptionsFromServer({
+    ...kieVeoDefaults,
+    ...requestParams,
+    model: model || requestParams.model || kieVeoDefaults.model,
+    duration: duration || requestParams.duration || kieVeoDefaults.duration,
+    resolution: resolution || requestParams.resolution || kieVeoDefaults.resolution,
+    aspectRatio: aspect_ratio || requestParams.aspectRatio || requestParams.aspect_ratio || kieVeoDefaults.aspectRatio,
+  });
+  const modelName = normalizeKieAiModel(model || requestParams.model || kieVeoDefaults.model || 'bytedance/seedance-2');
   const isVeo = /veo/i.test(modelName);
   let ep = config.endpoint || (isVeo ? '/api/v1/veo/generate' : '/api/v1/jobs/createTask');
   if (isVeo && /\/api\/v1\/jobs\/createTask$/i.test(ep)) ep = '/api/v1/veo/generate';
@@ -2295,22 +2360,30 @@ async function callKieAiVideoApi(config, log, opts) {
 
   let body;
   if (isVeo) {
-    const veoAspectRatio = normalizeKieAiVeoAspectRatio(aspect_ratio);
+    const effectiveVeoModel = normalizeKieAiModel(mergedVeoParams.model || modelName);
+    const veoAspectRatio = normalizeKieAiVeoAspectRatio(mergedVeoParams.aspectRatio || aspect_ratio);
     const veoMode = buildKieAiVeoMode(modelName, veoAspectRatio, imageUrls.length);
     body = {
       prompt: cleanKieAiVeoPrompt(prompt),
       imageUrls: imageUrls.slice(0, veoMode.maxImages),
-      model: modelName,
+      model: effectiveVeoModel,
       aspectRatio: veoMode.aspectRatio,
-      enableTranslation: true,
+      aspect_ratio: veoMode.aspectRatio,
+      resolution: mergedVeoParams.resolution,
+      duration: mergedVeoParams.duration,
+      enableTranslation: mergedVeoParams.enableTranslation,
+      enableFallback: mergedVeoParams.enableFallback,
       generationType: veoMode.generationType,
     };
+    if (mergedVeoParams.watermark) body.watermark = mergedVeoParams.watermark;
     if (body.imageUrls.length === 0) delete body.imageUrls;
     log.info('[Kie.ai][Veo] normalized request mode', {
       video_gen_id,
-      model: modelName,
+      model: effectiveVeoModel,
       generationType: body.generationType,
       aspectRatio: body.aspectRatio,
+      resolution: body.resolution,
+      duration: body.duration,
       input_image_count: imageUrls.length,
       sent_image_count: body.imageUrls ? body.imageUrls.length : 0,
       prompt_len_before: String(prompt || '').length,
@@ -3364,7 +3437,10 @@ async function callVideoApi(db, log, opts) {
       aspect_ratio,
       resolution: opts.resolution,
       image_url: opts.image_url,
+      first_frame_url: opts.first_frame_url,
+      last_frame_url: opts.last_frame_url,
       reference_urls: opts.reference_urls,
+      video_params: opts.video_params,
       files_base_url: opts.files_base_url,
       storage_local_path: opts.storage_local_path,
       video_gen_id: opts.video_gen_id,

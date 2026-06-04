@@ -31,6 +31,18 @@
           返回剧集
         </el-button>
         <div class="header-actions">
+          <el-button v-if="dramaId" class="btn-prompt-engine" @click="router.push('/prompt-engine/' + dramaId)">
+            <el-icon><MagicStick /></el-icon>
+            Prompt Engine
+          </el-button>
+          <el-button v-if="dramaId" class="btn-pipeline" @click="router.push('/pipeline/' + dramaId)">
+            <el-icon><Guide /></el-icon>
+            Pipeline
+          </el-button>
+          <el-button class="btn-workflow" @click="router.push('/workflow')">
+            <el-icon><Guide /></el-icon>
+            Quy trình
+          </el-button>
           <el-button class="btn-theme" :title="isDark ? '切换到浅色模式' : '切换到暗色模式'" @click="toggleTheme">
             <el-icon><Sunny v-if="isDark" /><Moon v-else /></el-icon>
             {{ isDark ? '浅色' : '暗色' }}
@@ -2402,6 +2414,54 @@
             </el-form-item>
           </el-col>
         </el-row>
+        <div v-if="showStoryboardKieVeo31Settings" class="sb-veo31-panel">
+          <div class="sb-veo31-title">
+            <strong>KIE / Veo 3.1</strong>
+            <span>Chỉ dùng Image to Video. Nếu không chỉnh riêng shot, app lấy default từ AI Config.</span>
+          </div>
+          <el-row :gutter="12">
+            <el-col :span="24">
+              <el-form-item label="Model variant">
+                <el-select v-model="sbVideoParams[videoParamsTarget.id].model" style="width:100%">
+                  <el-option v-for="preset in KIE_VEO31_MODEL_PRESETS" :key="preset.value" :label="preset.label" :value="preset.value" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="12">
+            <el-col :span="24">
+              <el-form-item label="Resolution">
+                <el-select v-model="sbVideoParams[videoParamsTarget.id].resolution" style="width:100%">
+                  <el-option v-for="r in videoParamsKieVeo31Preset.resolutions" :key="r" :label="r" :value="r" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="24">
+              <el-form-item label="Duration">
+                <el-select v-model="sbVideoParams[videoParamsTarget.id].duration" style="width:100%">
+                  <el-option v-for="d in videoParamsKieVeo31Preset.durations" :key="d" :label="`${d}s`" :value="d" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="12">
+            <el-col :span="24">
+              <el-form-item label="Watermark">
+                <el-input v-model="sbVideoParams[videoParamsTarget.id].watermark" maxlength="200" show-word-limit placeholder="Tuỳ chọn" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="Translation">
+                <el-switch v-model="sbVideoParams[videoParamsTarget.id].enableTranslation" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="Fallback">
+                <el-switch v-model="sbVideoParams[videoParamsTarget.id].enableFallback" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </div>
         <el-row :gutter="12">
           <el-col :span="8">
             <el-form-item label="镜头视角">
@@ -2593,11 +2653,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, reactive, nextTick, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Setting, Plus, Minus, Sunny, Moon, MagicStick, Upload, Delete, Check, Loading, WarningFilled, User, Box, Picture, Film, VideoCamera, Document, InfoFilled, Refresh, ZoomIn, QuestionFilled, DocumentAdd, Expand, Fold, VideoPlay } from '@element-plus/icons-vue'
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Setting, Plus, Minus, Sunny, Moon, MagicStick, Upload, Delete, Check, Loading, WarningFilled, User, Box, Picture, Film, VideoCamera, Document, InfoFilled, Refresh, ZoomIn, QuestionFilled, DocumentAdd, Expand, Fold, VideoPlay, Guide } from '@element-plus/icons-vue'
 import { useTheme } from '@/composables/useTheme'
 import { currentLanguage } from '@/i18n/runtime'
 import { useFilmStore } from '@/stores/film'
@@ -2620,6 +2680,14 @@ import { propLibraryAPI } from '@/api/propLibrary'
 import { generationSettingsAPI } from '@/api/prompts'
 import { parseScriptIntoEpisodes, episodesListToPlainScript } from '@/utils/scriptEpisodes'
 import { exportStoryboardSheet } from '@/utils/exportStoryboardSheet'
+import { getMissingPipelineGates, getPipelineStateFromDrama } from '@/utils/aiaxPipeline'
+import {
+  KIE_VEO31_MODEL_PRESETS,
+  DEFAULT_KIE_VEO31_OPTIONS,
+  getKieVeo31Preset,
+  isKieVeo31Model,
+  normalizeKieVeo31Options,
+} from '@/constants/videoModelCapabilities'
 import StylePickerButton from '@/components/StylePickerButton.vue'
 import AIConfigContent from '@/components/AIConfigContent.vue'
 import UniversalSegmentOmniAtEditor from '@/components/UniversalSegmentOmniAtEditor.vue'
@@ -2787,6 +2855,66 @@ const pipelineCountdownMsg = ref('')  // 倒计时说明文字
 const pipelineConcurrency = ref(3)
 const pipelineVideoConcurrency = ref(3)
 const pipelineActiveTasks = reactive(new Set())
+const aiaxPipelineState = computed(() => getPipelineStateFromDrama(store.drama))
+
+async function confirmPipelineGate(action, actionLabel) {
+  const missing = getMissingPipelineGates(aiaxPipelineState.value, action)
+  return confirmPipelineMissingGates(missing, actionLabel)
+}
+
+async function confirmPipelineGateGroup(actions, actionLabel) {
+  const byId = new Map()
+  for (const action of actions) {
+    for (const gate of getMissingPipelineGates(aiaxPipelineState.value, action)) {
+      byId.set(gate.id, gate)
+    }
+  }
+  return confirmPipelineMissingGates([...byId.values()], actionLabel)
+}
+
+async function confirmPipelineMissingGates(missing, actionLabel) {
+  if (!missing.length) return true
+  const message = h('div', { class: 'pipeline-gate-dialog' }, [
+    h('p', { class: 'pipeline-gate-dialog__lead' }, [
+      'Theo AIAX Pipeline, bước ',
+      h('strong', actionLabel),
+      ' đang thiếu gate:',
+    ]),
+    h('div', { class: 'pipeline-gate-dialog__list' }, missing.map((gate) => {
+      const note = (aiaxPipelineState.value.gates?.[gate.id]?.note || '').toString().trim()
+      return h('section', { class: 'pipeline-gate-dialog__item', key: gate.id }, [
+        h('div', { class: 'pipeline-gate-dialog__title' }, gate.title),
+        h('p', { class: 'pipeline-gate-dialog__rule' }, gate.rule),
+        note
+          ? h('div', { class: 'pipeline-gate-dialog__note' }, [
+              h('span', 'Ghi chú Pipeline'),
+              h('p', note),
+            ])
+          : null,
+      ])
+    })),
+    h('p', { class: 'pipeline-gate-dialog__foot' }, 'Anh vẫn có thể chạy tiếp để test, nhưng nên vào Pipeline để duyệt hoặc ghi lý do bỏ qua gate.'),
+  ])
+  try {
+    await ElMessageBox.confirm(
+      message,
+      'Pipeline gate chưa đạt',
+      {
+        confirmButtonText: 'Vẫn chạy',
+        cancelButtonText: 'Mở Pipeline',
+        type: 'warning',
+        distinguishCancelAndClose: true,
+        customClass: 'pipeline-gate-message-box',
+      }
+    )
+    return true
+  } catch (actionResult) {
+    if (actionResult === 'cancel' && dramaId.value) {
+      router.push('/pipeline/' + dramaId.value)
+    }
+    return false
+  }
+}
 
 async function loadPipelineConcurrency() {
   try {
@@ -3075,6 +3203,8 @@ const sbMovement = ref({})
 const sbLighting = ref({})   // 灯光风格
 const sbDof = ref({})        // 景深
 const sbLayoutDescription = ref({})  // 空间布局与人物站位描述（生成分镜时 AI 输出的最高优先级合同，用于首尾帧强制一致）
+const sbVideoParams = ref({})
+const videoParamsAiConfig = ref(null)
 const regeneratingLayoutSbIds = reactive(new Set())  // 正在 AI 重新生成布局描述的分镜 id 集合
 /** 分镜创作模式：classic | universal（默认 classic，存库 storyboards.creation_mode） */
 const sbCreationMode = ref({})
@@ -4131,7 +4261,10 @@ async function onGenerateSbFrameImage(sb, slot) {
       prompt = sbRow?.polished_prompt || sbRow?.image_prompt || sbRow?.description || ''
     }
     try {
-      await storyboardsAPI.update(sb.id, { character_ids: Array.isArray(idsToSave) ? idsToSave : [] })
+      await storyboardsAPI.update(sb.id, {
+        character_ids: Array.isArray(idsToSave) ? idsToSave : [],
+        prop_ids: getSbPropIds(sb.id),
+      })
     } catch (e) {
       ElMessage.warning('保存分镜角色失败')
       return
@@ -4226,7 +4359,10 @@ async function onGenerateSbImage(sb) {
         .filter((n) => Number.isFinite(n))
     }
     try {
-      await storyboardsAPI.update(sb.id, { character_ids: Array.isArray(idsToSave) ? idsToSave : [] })
+      await storyboardsAPI.update(sb.id, {
+        character_ids: Array.isArray(idsToSave) ? idsToSave : [],
+        prop_ids: getSbPropIds(sb.id),
+      })
     } catch (e) {
       console.warn('[分镜图] 保存角色勾选失败', e)
       ElMessage.warning('保存分镜角色失败，请稍后重试')
@@ -4247,10 +4383,18 @@ async function onGenerateSbImage(sb) {
       if (pollRes?.status === 'failed') {
         sb.errorMsg = pollRes.error || '生成失败'
       } else {
+        await loadDrama()
+        await loadSingleStoryboardMedia(sb.id)
+        const latest = getSbAllImages(sb.id)
+          .filter((img) => gridMode.value !== 'single' || !['quad_grid', 'nine_grid'].includes(img.frame_type))
+          .sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0]
+        if (latest) onSelectSbMainImage(sb, latest)
         ElMessage.success('分镜图生成完成')
       }
     } else {
       await loadSingleStoryboardMedia(sb.id)
+      const latest = getSbAllImages(sb.id).sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0]
+      if (latest) onSelectSbMainImage(sb, latest)
     }
   } catch (e) {
     console.error(e)
@@ -4355,6 +4499,7 @@ function syncStoryboardStateFromEpisode(ep) {
   const nextLighting = {}
   const nextDof = {}
   const nextLayoutDescription = {}
+  const nextVideoParams = {}
   const nextCreationMode = {}
   const nextUniversalSegment = {}
   for (const sb of boards) {
@@ -4377,6 +4522,7 @@ function syncStoryboardStateFromEpisode(ep) {
     nextLighting[sb.id] = sb.lighting_style || ''
     nextDof[sb.id] = sb.depth_of_field || ''
     nextLayoutDescription[sb.id] = (sb.layout_description ?? '').toString()
+    nextVideoParams[sb.id] = normalizeKieVeo31Options(sb.video_params || {})
     const charList = Array.isArray(sb.characters) ? sb.characters : (sb.characters != null ? [sb.characters] : [])
     nextCharIds[sb.id] = charList.map((c) => (typeof c === 'object' && c != null ? Number(c.id) : Number(c))).filter((n) => Number.isFinite(n))
     nextPropIds[sb.id] = Array.isArray(sb.prop_ids) ? sb.prop_ids : []
@@ -4403,6 +4549,7 @@ function syncStoryboardStateFromEpisode(ep) {
   sbMovement.value = nextMovement
   sbLighting.value = nextLighting
   sbDof.value = nextDof
+  sbVideoParams.value = nextVideoParams
   sbLayoutDescription.value = nextLayoutDescription
   sbCreationMode.value = nextCreationMode
   sbUniversalSegmentText.value = nextUniversalSegment
@@ -4695,8 +4842,15 @@ async function onRegenAffectedSbImages(assetKey, affectedBoards) {
             setTimeout(tick, 2000)
           })
           if (pollRes?.status !== 'completed') failed++
+          else {
+            await loadSingleStoryboardMedia(sb.id)
+            const latest = getSbAllImages(sb.id).sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0]
+            if (latest) onSelectSbFrameImage(sb, latest, useFirstLast ? 'first' : 'first')
+          }
         } else {
           await loadSingleStoryboardMedia(sb.id)
+          const latest = getSbAllImages(sb.id).sort((a, b) => Number(b.id || 0) - Number(a.id || 0))[0]
+          if (latest) onSelectSbFrameImage(sb, latest, useFirstLast ? 'first' : 'first')
         }
         if (useFirstLast) {
           delete sbSelectedImgId.value[sb.id]
@@ -6057,6 +6211,75 @@ function videoModelNameFromAiConfig(cfg) {
   return String(m || '').trim()
 }
 
+function parseAiConfigSettings(settings) {
+  if (!settings) return {}
+  if (typeof settings === 'object') return settings
+  try {
+    const parsed = JSON.parse(settings)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch (_) {
+    return {}
+  }
+}
+
+function isKieVeo31Config(cfg) {
+  if (!cfg) return false
+  return String(cfg.api_protocol || cfg.provider || '').toLowerCase() === 'kie_ai'
+    && isKieVeo31Model(videoModelNameFromAiConfig(cfg))
+}
+
+function getDefaultKieVeo31OptionsFromConfig(cfg) {
+  const settings = parseAiConfigSettings(cfg?.settings)
+  return normalizeKieVeo31Options({
+    ...DEFAULT_KIE_VEO31_OPTIONS,
+    model: videoModelNameFromAiConfig(cfg) || DEFAULT_KIE_VEO31_OPTIONS.model,
+    ...(settings.kie_veo31 || {}),
+  })
+}
+
+const videoParamsKieVeo31Preset = computed(() => {
+  const target = videoParamsTarget.value
+  const params = target?.id ? sbVideoParams.value[target.id] : null
+  return getKieVeo31Preset(params?.model || getDefaultKieVeo31OptionsFromConfig(videoParamsAiConfig.value).model)
+})
+
+const showStoryboardKieVeo31Settings = computed(() => isKieVeo31Config(videoParamsAiConfig.value))
+
+function ensureSbVeo31Params(sb, cfg = videoParamsAiConfig.value) {
+  if (!sb?.id) return normalizeKieVeo31Options()
+  const defaults = getDefaultKieVeo31OptionsFromConfig(cfg)
+  const current = sbVideoParams.value[sb.id] || {}
+  const normalized = normalizeKieVeo31Options({ ...defaults, ...current })
+  sbVideoParams.value = { ...sbVideoParams.value, [sb.id]: normalized }
+  return normalized
+}
+
+function getSbVideoParamsForApi(sb, cfg = null) {
+  const videoCfg = cfg || activeVideoAiConfigCache || videoParamsAiConfig.value
+  if (!isKieVeo31Config(videoCfg)) return undefined
+  const params = ensureSbVeo31Params(sb, videoCfg)
+  const preset = getKieVeo31Preset(params.model)
+  const projectRatio = projectAspectRatio.value || '16:9'
+  if (Array.isArray(preset.aspectRatios) && !preset.aspectRatios.includes(projectRatio)) {
+    throw new Error(`Model ${preset.label || params.model} không hỗ trợ aspect ratio ${projectRatio}. Hãy đổi tỉ lệ project hoặc chọn model khác.`)
+  }
+  return {
+    ...params,
+    aspectRatio: projectRatio,
+    duration: params.duration || getSbVideoDurationForApi(sb),
+  }
+}
+
+function getSbVideoAspectForApi(sb, cfg = null) {
+  const params = getSbVideoParamsForApi(sb, cfg)
+  return params?.aspectRatio || projectAspectRatio.value || '16:9'
+}
+
+function getSbVideoResolutionForApi(sb, cfg = null) {
+  const params = getSbVideoParamsForApi(sb, cfg)
+  return params?.resolution || videoResolution.value || undefined
+}
+
 /** 模型名含 seedance 且含 2-0（与后端 videoClient 判定 Seedance 2.x 对齐） */
 function isSeedance2VideoModel(modelName) {
   const m = String(modelName || '').toLowerCase()
@@ -6188,6 +6411,13 @@ function angleToPromptFragment(h, v, s) {
 async function onSaveSbVideoFields(sb) {
   if (!sb?.id) return
   try {
+    let videoParamsPayload = null
+    if (showStoryboardKieVeo31Settings.value) {
+      const normalizedVideoParams = normalizeKieVeo31Options(sbVideoParams.value[sb.id] || {})
+      delete normalizedVideoParams.aspectRatio
+      delete normalizedVideoParams.aspect_ratio
+      videoParamsPayload = JSON.stringify(normalizedVideoParams)
+    }
     await storyboardsAPI.update(sb.id, {
       title: (sbTitle.value[sb.id] || '').toString().trim() || null,
       location: (sbLocation.value[sb.id] || '').toString().trim() || null,
@@ -6207,6 +6437,7 @@ async function onSaveSbVideoFields(sb) {
       depth_of_field: sbDof.value[sb.id] || null,
       shot_type: (sbShotType.value[sb.id] || '').toString().trim() || null,
       layout_description: (sbLayoutDescription.value[sb.id] || '').toString().trim() || null,
+      video_params: videoParamsPayload,
       creation_mode: sbCreationMode.value[sb.id] === 'universal' ? 'universal' : 'classic',
       universal_segment_text: (sbUniversalSegmentText.value[sb.id] || '').toString().trim() || null,
     })
@@ -6234,8 +6465,12 @@ async function onSaveSbVideoPrompt(sb) {
   }
 }
 
-function onOpenVideoParamsDialog(sb) {
+async function onOpenVideoParamsDialog(sb) {
   videoParamsTarget.value = sb
+  videoParamsAiConfig.value = await getActiveVideoAiConfig()
+  if (isKieVeo31Config(videoParamsAiConfig.value)) {
+    ensureSbVeo31Params(sb, videoParamsAiConfig.value)
+  }
   showVideoParamsDialog.value = true
 }
 
@@ -6351,6 +6586,7 @@ async function onRegenerateLayoutDescription(sb) {
 
 async function onGenerateSbVideo(sb) {
   if (!dramaId.value || !sb?.id || !sbCanSubmitVideo(sb)) return
+  if (!(await confirmPipelineGate('batch_video', 'gen video phân cảnh'))) return
   const universal = isSbUniversalMode(sb.id)
   let universalOmniApi = universal
   if (universal) {
@@ -6432,18 +6668,22 @@ async function onGenerateSbVideo(sb) {
       referenceUrls = [...referenceUrls, vLast]
     }
     const preferClassicPrompt = universal && !universalOmniApi
+    const activeVideoCfgForApi = await getActiveVideoAiConfig()
+    const videoParamsForApi = getSbVideoParamsForApi(sb, activeVideoCfgForApi)
     const res = await videosAPI.create({
       drama_id: dramaId.value,
       storyboard_id: sb.id,
       prompt: buildSbVideoPromptForApi(sb, { preferClassicPrompt }),
+      model: videoParamsForApi?.model,
       image_url: (vFirst || absoluteUrl) || undefined,
       first_frame_url: vFirst || absoluteUrl || undefined,
       last_frame_url: vLast,
       reference_image_urls: referenceUrls,
       style: getSelectedStyle(),
-      aspect_ratio: projectAspectRatio.value || '16:9',
-      resolution: videoResolution.value || undefined,
-      duration: getSbVideoDurationForApi(sb),
+      aspect_ratio: getSbVideoAspectForApi(sb, activeVideoCfgForApi),
+      resolution: getSbVideoResolutionForApi(sb, activeVideoCfgForApi),
+      duration: videoParamsForApi?.duration || getSbVideoDurationForApi(sb),
+      video_params: videoParamsForApi,
     })
     if (res?.task_id) {
       const pollRes = await pollTask(res.task_id, () => loadSingleStoryboardMedia(sb.id), meta)
@@ -6580,6 +6820,7 @@ async function onGenerateStoryboard() {
   trackFilmCreateAction('generate_storyboard_click')
   const epId = currentEpisodeId.value
   if (!epId) return
+  if (!(await confirmPipelineGate('storyboard', 'AI tạo storyboard'))) return
   const meta = buildExtractTaskMeta(store, dramaId.value, epId, GEN_RESOURCE.GENERATE_STORYBOARD, 'AI生成分镜')
   genStore.markRunning(meta)
   // 生成期间每 2 秒刷新该集分镜列表，让已解析的分镜逐步出现（切集后仍更新原集缓存）
@@ -6758,6 +6999,7 @@ async function startBatchImageGeneration() {
 
 async function startBatchVideoGeneration() {
   if (!currentEpisodeId.value || batchVideoRunning.value || pipelineRunning.value) return
+  if (!(await confirmPipelineGate('batch_video', 'batch gen video phân cảnh'))) return
   batchVideoErrors.value = []
   batchVideoStopping.value = false
   batchVideoRunning.value = true
@@ -6841,18 +7083,22 @@ async function startBatchVideoGeneration() {
           if (!universal && vLast && refUrls && !refUrls.includes(vLast)) {
             refUrls = [...refUrls, vLast]
           }
+          const activeVideoCfgForApi = await getActiveVideoAiConfig()
+          const videoParamsForApi = getSbVideoParamsForApi(sb, activeVideoCfgForApi)
           const res = await videosAPI.create({
             drama_id: dramaId.value,
             storyboard_id: sb.id,
             prompt: buildSbVideoPromptForApi(sb),
+            model: videoParamsForApi?.model,
             image_url: vFirst || undefined,
             first_frame_url: vFirst,
             last_frame_url: vLast,
             reference_image_urls: refUrls,
             style: getSelectedStyle(),
-            aspect_ratio: projectAspectRatio.value || '16:9',
-            resolution: videoResolution.value || undefined,
-            duration: getSbVideoDurationForApi(sb),
+            aspect_ratio: getSbVideoAspectForApi(sb, activeVideoCfgForApi),
+            resolution: getSbVideoResolutionForApi(sb, activeVideoCfgForApi),
+            duration: videoParamsForApi?.duration || getSbVideoDurationForApi(sb),
+            video_params: videoParamsForApi,
           })
           if (res?.task_id) {
             const pollRes = await pollTask(res.task_id, () => loadSingleStoryboardMedia(sb.id))
@@ -6903,6 +7149,7 @@ function getFinalizeMergeOptions() {
 
 async function onGenerateVideo() {
   if (!currentEpisodeId.value) return
+  if (!(await confirmPipelineGate('final_video', 'tổng hợp video'))) return
   const epId = currentEpisodeId.value
   const did = dramaId.value
   const dramaTitle = store.drama?.title || ''
@@ -7091,6 +7338,7 @@ async function pipelineWithRetry(stepName, fn, maxRetries = 3) {
 
 async function startOneClickPipeline() {
   if (!currentEpisodeId.value || pipelineRunning.value) return
+  if (!(await confirmPipelineGateGroup(['storyboard', 'batch_video', 'final_video'], 'một click thành phim'))) return
   trackFilmCreateAction('one_click_generate_start')
   pipelineErrorLog.value = []
   pipelineCurrentStep.value = ''
@@ -7109,6 +7357,7 @@ async function startOneClickPipeline() {
 
 async function startTextFrameworkPipeline() {
   if (!currentEpisodeId.value || pipelineRunning.value) return
+  if (!(await confirmPipelineGate('storyboard', 'tạo text framework/storyboard'))) return
   pipelineErrorLog.value = []
   pipelineCurrentStep.value = ''
   pipelineStepIndex.value = 0
@@ -7496,18 +7745,22 @@ async function runOneClickPipeline(textOnly = false) {
             if (!universal && vLast && refUrls && !refUrls.includes(vLast)) {
               refUrls = [...refUrls, vLast]
             }
+            const activeVideoCfgForApi = await getActiveVideoAiConfig()
+            const videoParamsForApi = getSbVideoParamsForApi(sb, activeVideoCfgForApi)
             const res = await videosAPI.create({
               drama_id: dramaIdVal,
               storyboard_id: sb.id,
               prompt: buildSbVideoPromptForApi(sb),
+              model: videoParamsForApi?.model,
               image_url: vFirst || undefined,
               first_frame_url: vFirst,
               last_frame_url: vLast,
               reference_image_urls: refUrls,
               style,
-              aspect_ratio: projectAspectRatio.value || '16:9',
-              resolution: videoResolution.value || undefined,
-              duration: getSbVideoDurationForApi(sb),
+              aspect_ratio: getSbVideoAspectForApi(sb, activeVideoCfgForApi),
+              resolution: getSbVideoResolutionForApi(sb, activeVideoCfgForApi),
+              duration: videoParamsForApi?.duration || getSbVideoDurationForApi(sb),
+              video_params: videoParamsForApi,
             })
             if (res?.task_id) {
               const result = await pollTaskWithPause(res.task_id, () => loadSingleStoryboardMedia(sb.id))
@@ -7834,17 +8087,21 @@ async function runRepairPipeline() {
           if (!universal && vLast && refUrls && !refUrls.includes(vLast)) {
             refUrls = [...refUrls, vLast]
           }
+          const activeVideoCfgForApi = await getActiveVideoAiConfig()
+          const videoParamsForApi = getSbVideoParamsForApi(sb, activeVideoCfgForApi)
           const res = await videosAPI.create({
             drama_id: dramaIdVal,
             storyboard_id: sb.id,
             prompt: buildSbVideoPromptForApi(sb),
+            model: videoParamsForApi?.model,
             image_url: vFirst || undefined,
             first_frame_url: vFirst,
             last_frame_url: vLast,
             reference_image_urls: refUrls,
-            aspect_ratio: projectAspectRatio.value || '16:9',
-            resolution: videoResolution.value || undefined,
-            duration: getSbVideoDurationForApi(sb),
+            aspect_ratio: getSbVideoAspectForApi(sb, activeVideoCfgForApi),
+            resolution: getSbVideoResolutionForApi(sb, activeVideoCfgForApi),
+            duration: videoParamsForApi?.duration || getSbVideoDurationForApi(sb),
+            video_params: videoParamsForApi,
           })
           if (res?.task_id) {
             const result = await pollTaskWithPause(res.task_id, () => loadSingleStoryboardMedia(sb.id))
@@ -8193,6 +8450,54 @@ html.light .btn-theme {
   --el-button-hover-bg-color: rgba(99, 102, 241, 0.08);
   --el-button-hover-border-color: rgba(99, 102, 241, 0.3);
   --el-button-hover-text-color: #4f46e5;
+}
+.btn-workflow {
+  --el-button-bg-color: rgba(20, 184, 166, 0.08);
+  --el-button-border-color: rgba(20, 184, 166, 0.28);
+  --el-button-text-color: #5eead4;
+  --el-button-hover-bg-color: rgba(20, 184, 166, 0.16);
+  --el-button-hover-border-color: rgba(20, 184, 166, 0.48);
+  --el-button-hover-text-color: #99f6e4;
+}
+html.light .btn-workflow {
+  --el-button-bg-color: rgba(15, 118, 110, 0.06);
+  --el-button-border-color: rgba(15, 118, 110, 0.22);
+  --el-button-text-color: #0f766e;
+  --el-button-hover-bg-color: rgba(15, 118, 110, 0.12);
+  --el-button-hover-border-color: rgba(15, 118, 110, 0.4);
+  --el-button-hover-text-color: #115e59;
+}
+.btn-pipeline {
+  --el-button-bg-color: rgba(124, 58, 237, 0.12);
+  --el-button-border-color: rgba(124, 58, 237, 0.34);
+  --el-button-text-color: #c4b5fd;
+  --el-button-hover-bg-color: rgba(124, 58, 237, 0.2);
+  --el-button-hover-border-color: rgba(124, 58, 237, 0.52);
+  --el-button-hover-text-color: #ddd6fe;
+}
+html.light .btn-pipeline {
+  --el-button-bg-color: rgba(124, 58, 237, 0.08);
+  --el-button-border-color: rgba(124, 58, 237, 0.28);
+  --el-button-text-color: #6d28d9;
+  --el-button-hover-bg-color: rgba(124, 58, 237, 0.14);
+  --el-button-hover-border-color: rgba(124, 58, 237, 0.46);
+  --el-button-hover-text-color: #5b21b6;
+}
+.btn-prompt-engine {
+  --el-button-bg-color: rgba(245, 158, 11, 0.12);
+  --el-button-border-color: rgba(245, 158, 11, 0.34);
+  --el-button-text-color: #fbbf24;
+  --el-button-hover-bg-color: rgba(245, 158, 11, 0.2);
+  --el-button-hover-border-color: rgba(245, 158, 11, 0.52);
+  --el-button-hover-text-color: #fde68a;
+}
+html.light .btn-prompt-engine {
+  --el-button-bg-color: rgba(245, 158, 11, 0.08);
+  --el-button-border-color: rgba(245, 158, 11, 0.3);
+  --el-button-text-color: #b45309;
+  --el-button-hover-bg-color: rgba(245, 158, 11, 0.14);
+  --el-button-hover-border-color: rgba(245, 158, 11, 0.48);
+  --el-button-hover-text-color: #92400e;
 }
 /* ===== 左侧固定侧边栏 ===== */
 .quick-nav {
@@ -10097,6 +10402,25 @@ html.light .sb-video-placeholder {
 .vp-dialog-form .el-form-item {
   margin-bottom: 12px;
 }
+.sb-veo31-panel {
+  margin: 2px 0 14px;
+  padding: 12px 12px 0;
+  border: 1px solid #ddd6fe;
+  border-radius: 8px;
+  background: #faf7ff;
+}
+.sb-veo31-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  margin-bottom: 10px;
+  color: #2f235f;
+}
+.sb-veo31-title span {
+  font-size: 12px;
+  color: #64748b;
+}
 .sb-video-prompt-text {
   font-size: 0.85rem;
   color: #a1a1aa;
@@ -10502,5 +10826,84 @@ html.light .frame-layout-anchor {
   color: #64748b;
   margin-top: 4px;
   line-height: 1.4;
+}
+
+:global(.pipeline-gate-message-box) {
+  width: min(560px, calc(100vw - 32px));
+}
+
+:global(.pipeline-gate-message-box .el-message-box__content) {
+  padding-top: 8px;
+}
+
+:global(.pipeline-gate-dialog) {
+  color: #243044;
+}
+
+:global(.pipeline-gate-dialog__lead),
+:global(.pipeline-gate-dialog__foot) {
+  margin: 0;
+  color: #4b5565;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+:global(.pipeline-gate-dialog__lead strong) {
+  color: #111827;
+}
+
+:global(.pipeline-gate-dialog__list) {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+:global(.pipeline-gate-dialog__item) {
+  border: 1px solid #e3e8f2;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px 12px;
+}
+
+:global(.pipeline-gate-dialog__title) {
+  color: #111827;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+:global(.pipeline-gate-dialog__rule) {
+  margin: 6px 0 0;
+  color: #526071;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+:global(.pipeline-gate-dialog__note) {
+  margin-top: 8px;
+  border-left: 3px solid #7c3aed;
+  border-radius: 6px;
+  background: #f3efff;
+  padding: 8px 10px;
+}
+
+:global(.pipeline-gate-dialog__note span) {
+  display: block;
+  color: #6d28d9;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+:global(.pipeline-gate-dialog__note p) {
+  margin: 4px 0 0;
+  color: #2f255f;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

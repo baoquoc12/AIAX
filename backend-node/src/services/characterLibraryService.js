@@ -69,6 +69,10 @@ function generateCharacterImage(db, log, cfg, characterId, modelName, style) {
     prompt = charRow.name || '';
   }
   const styleForImage = (effectiveCfg?.style?.default_style_en || effectiveCfg?.style?.default_style || '').trim();
+  prompt = appendPrompt(
+    prompt,
+    'strict character identity reference sheet, preserve the same face, age, hairstyle, body type, skin tone, core outfit, facial proportions, and distinctive identity anchors across all future shots; neutral full-body view plus clear face readability; no scene-specific costume change unless explicitly described'
+  );
   prompt = appendPrompt(prompt, styleForImage);
   if (!(style && String(style).trim())) {
     prompt = appendPrompt(prompt, effectiveCfg?.style?.default_role_style || '');

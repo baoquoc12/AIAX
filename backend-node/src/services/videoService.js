@@ -9,17 +9,38 @@ function resolveRemoteVideoUrl(videoUrl, fallbackError) {
   return { ok: false, error: (fallbackError || '超时或失败').slice(0, 500) };
 }
 
+function normalizeVideoErrorMessage(errorMsg) {
+  const raw = String(errorMsg || '').trim();
+  if (!raw) return 'Tạo video thất bại hoặc quá thời gian chờ.';
+  const lower = raw.toLowerCase();
+  if (lower.includes('prominent public figure') || lower.includes('safety filter')) {
+    return 'KIE/Veo đã chặn request vì safety filter, có thể ảnh tham chiếu hoặc prompt bị nhận nhầm là người nổi tiếng/public figure. Hãy đổi ảnh nhân vật/bối cảnh hoặc sửa prompt cho rõ đây là nhân vật hư cấu rồi tạo lại.';
+  }
+  if (lower.includes('internal error')) {
+    return 'KIE/Veo trả lỗi nội bộ. Request đã gửi được nhưng provider không tạo được video lần này; nên thử tạo lại, đổi model variant hoặc giảm prompt/option.';
+  }
+  if (lower.includes('unable to generate audio')) {
+    return 'KIE/Veo không tạo được audio cho prompt này. Hãy tắt audio nếu model có option đó, hoặc bỏ thoại/âm thanh khỏi prompt rồi tạo lại.';
+  }
+  if (lower.includes('credits insufficient') || lower.includes('balance')) {
+    return 'Tài khoản KIE không đủ credit để chạy request này.';
+  }
+  return raw.slice(0, 500);
+}
+
 /** 将 video_generations 标为失败；若无 error_msg 列则只更新 status/updated_at */
 function setVideoGenFailed(db, videoGenId, errorMsg, now) {
+  const normalizedError = normalizeVideoErrorMessage(errorMsg);
   try {
     db.prepare('UPDATE video_generations SET status = ?, error_msg = ?, updated_at = ? WHERE id = ?').run(
-      'failed', (errorMsg || '').slice(0, 500), now, videoGenId
+      'failed', normalizedError.slice(0, 500), now, videoGenId
     );
   } catch (e) {
     if ((e.message || '').includes('error_msg')) {
       db.prepare('UPDATE video_generations SET status = ?, updated_at = ? WHERE id = ?').run('failed', now, videoGenId);
     } else throw e;
   }
+  return normalizedError;
 }
 
 function list(db, query) {
@@ -232,6 +253,13 @@ async function processVideoGeneration(db, log, videoGenId) {
         if (!Array.isArray(reference_urls)) reference_urls = null;
       } catch (_) {}
     }
+    let videoParams = {};
+    if (row.video_params) {
+      try {
+        const parsed = typeof row.video_params === 'string' ? JSON.parse(row.video_params) : row.video_params;
+        if (parsed && typeof parsed === 'object') videoParams = parsed;
+      } catch (_) {}
+    }
     // 优先使用分镜自身的镜头时长（storyboard.duration），其次用 video_generations.duration
     let effectiveDuration = row.duration || null;
     if (row.storyboard_id) {
@@ -268,6 +296,7 @@ async function processVideoGeneration(db, log, videoGenId) {
       seed: row.seed,
       camera_fixed: row.camera_fixed,
       watermark: row.watermark,
+      video_params: videoParams,
       provider: row.provider,
       drama_id: row.drama_id,
       storyboard_id: row.storyboard_id || undefined,
@@ -281,9 +310,9 @@ async function processVideoGeneration(db, log, videoGenId) {
     });
     const now2 = new Date().toISOString();
     if (result.error) {
-      setVideoGenFailed(db, videoGenId, result.error, now2);
-      if (row.task_id) taskService.updateTaskError(db, row.task_id, result.error);
-      log.error('Video generation failed', { id: videoGenId, error: result.error });
+      const normalizedError = setVideoGenFailed(db, videoGenId, result.error, now2);
+      if (row.task_id) taskService.updateTaskError(db, row.task_id, normalizedError);
+      log.error('Video generation failed', { id: videoGenId, error: normalizedError, raw_error: result.error });
       return;
     }
     const directVideo = resolveRemoteVideoUrl(result.video_url, result.error);
@@ -324,9 +353,9 @@ async function processVideoGeneration(db, log, videoGenId) {
       return;
     }
     if (result.video_url) {
-      setVideoGenFailed(db, videoGenId, directVideo.error, now2);
-      if (row.task_id) taskService.updateTaskError(db, row.task_id, directVideo.error);
-      log.error('Video generation failed', { id: videoGenId, error: directVideo.error });
+      const normalizedError = setVideoGenFailed(db, videoGenId, directVideo.error, now2);
+      if (row.task_id) taskService.updateTaskError(db, row.task_id, normalizedError);
+      log.error('Video generation failed', { id: videoGenId, error: normalizedError, raw_error: directVideo.error });
       return;
     }
     if (result.task_id) {
@@ -388,19 +417,19 @@ async function processVideoGeneration(db, log, videoGenId) {
         if (row.task_id) taskService.updateTaskResult(db, row.task_id, { video_generation_id: videoGenId, video_url: polledVideo.video_url, status: 'completed' });
         log.info('Video generation completed (after poll)', { id: videoGenId, local_path: localPath });
       } else {
-        setVideoGenFailed(db, videoGenId, polledVideo.error, now3);
-        if (row.task_id) taskService.updateTaskError(db, row.task_id, polledVideo.error);
-        log.error('Video generation failed (after poll)', { id: videoGenId, error: polledVideo.error });
+        const normalizedError = setVideoGenFailed(db, videoGenId, polledVideo.error, now3);
+        if (row.task_id) taskService.updateTaskError(db, row.task_id, normalizedError);
+        log.error('Video generation failed (after poll)', { id: videoGenId, error: normalizedError, raw_error: polledVideo.error });
       }
       return;
     }
-    setVideoGenFailed(db, videoGenId, '未返回 task_id 或 video_url', now2);
-    if (row.task_id) taskService.updateTaskError(db, row.task_id, '未返回 task_id 或 video_url');
+    const normalizedError = setVideoGenFailed(db, videoGenId, '未返回 task_id 或 video_url', now2);
+    if (row.task_id) taskService.updateTaskError(db, row.task_id, normalizedError);
   } catch (err) {
     const now2 = new Date().toISOString();
-    setVideoGenFailed(db, videoGenId, err.message, now2);
-    if (row && row.task_id) taskService.updateTaskError(db, row.task_id, err.message);
-    log.error('Video generation error', { id: videoGenId, error: err.message });
+    const normalizedError = setVideoGenFailed(db, videoGenId, err.message, now2);
+    if (row && row.task_id) taskService.updateTaskError(db, row.task_id, normalizedError);
+    log.error('Video generation error', { id: videoGenId, error: normalizedError, raw_error: err.message });
   }
 }
 

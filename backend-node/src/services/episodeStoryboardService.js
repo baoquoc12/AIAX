@@ -328,49 +328,129 @@ function generateImagePrompt(sb, style) {
 
 function generateVideoPrompt(sb, style, videoRatio) {
   const parts = [];
-  // 场景与标题
+  // Keep provider-facing labels in English to avoid mixed Chinese/Vietnamese/English speech in video models.
   if (sb.scene_description) {
-    parts.push('场景：' + sb.scene_description);
+    parts.push('Scene: ' + sb.scene_description);
   } else if (sb.location) {
-    const scene = sb.time ? sb.location + '，' + sb.time : sb.location;
-    parts.push('场景：' + scene);
+    const scene = sb.time ? sb.location + ', ' + sb.time : sb.location;
+    parts.push('Scene: ' + scene);
   }
-  if (sb.title) parts.push('镜头标题：' + sb.title);
-  // 动作与对白（核心叙事）
-  if (sb.action) parts.push('动作：' + sb.action);
-  if (sb.dialogue) parts.push('对话：' + sb.dialogue);
-  if (sb.narration) parts.push('解说旁白：' + sb.narration);
-  if (sb.result) parts.push('结果：' + sb.result);
-  // 镜头与运镜
+  if (sb.title) parts.push('Shot title: ' + sb.title);
+  if (sb.action) parts.push('Action: ' + sb.action);
+  if (sb.dialogue) parts.push('Dialogue, keep original language exactly: ' + sb.dialogue);
+  if (sb.narration) parts.push('Vietnamese voice-over narration: ' + sb.narration);
+  if (sb.result) parts.push('Result: ' + sb.result);
   const shotType = sb.shot_type || sb.camera_shot_type;
-  if (shotType) parts.push('景别：' + shotType);
-  // 结构化视角：中文标签 + 英文描述（兼顾中英文视频模型）
+  if (shotType) parts.push('Shot size: ' + shotType);
   if (sb.angle_h && sb.angle_v && sb.angle_s) {
-    const chLabel = angleService.toChineseLabel(sb.angle_h, sb.angle_v, sb.angle_s);
     const angleFragment = angleService.toPromptFragment(sb.angle_h, sb.angle_v, sb.angle_s);
-    parts.push(`镜头角度：${chLabel}（${angleFragment}）`);
+    parts.push('Camera angle: ' + angleFragment);
   } else {
     const angle = sb.angle ?? sb.camera_angle;
-    if (angle) parts.push('镜头角度：' + angle);
+    if (angle) parts.push('Camera angle: ' + angle);
   }
   const movement = sb.movement ?? sb.camera_movement;
-  if (movement) parts.push('运镜：' + movement);
-  // 氛围与情绪
-  if (sb.atmosphere) parts.push('氛围：' + sb.atmosphere);
-  if (sb.emotion) parts.push('情绪：' + sb.emotion);
+  if (movement) parts.push('Camera movement: ' + movement);
+  if (sb.atmosphere) parts.push('Atmosphere: ' + sb.atmosphere);
+  if (sb.emotion) parts.push('Emotion: ' + sb.emotion);
   if (sb.emotion_intensity != null && sb.emotion_intensity !== '') {
-    parts.push('情绪强度：' + String(sb.emotion_intensity));
+    parts.push('Emotion intensity: ' + String(sb.emotion_intensity));
   }
-  // 声音
-  if (sb.bgm_prompt) parts.push('配乐：' + sb.bgm_prompt);
-  if (sb.sound_effect) parts.push('音效：' + sb.sound_effect);
-  // 时长
+  if (sb.bgm_prompt) parts.push('Music: ' + sb.bgm_prompt);
+  if (sb.sound_effect) parts.push('Diegetic sound effects only: ' + sb.sound_effect);
   const durationSec = normalizeDuration(sb.duration) || 5;
-  parts.push('时长：' + durationSec + '秒');
-  // 风格（英文 token 保持英文以兼容视频 AI）与画面比例
-  if (style) parts.push('风格：' + style);
+  parts.push('Duration: ' + durationSec + ' seconds');
+  if (style) parts.push('Visual style: ' + style);
   if (videoRatio) parts.push('=VideoRatio: ' + videoRatio);
-  return parts.length ? parts.join('。') : '视频场景';
+  return parts.length ? parts.join('. ') : 'Video scene';
+}
+
+function normalizePropMatchText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function propAliases(name) {
+  const base = normalizePropMatchText(name);
+  const aliases = new Set([base]);
+  const words = base.split(/\s+/).filter(Boolean);
+  if (words.length > 1) {
+    aliases.add(words.join(''));
+    aliases.add(words[0]);
+  }
+  if (base.includes('usb')) {
+    aliases.add('usb');
+    aliases.add('usb drive');
+    aliases.add('flash drive');
+    aliases.add('thumb drive');
+  }
+  return Array.from(aliases).filter((s) => s && s.length >= 2);
+}
+
+function inferPropIdsForStoryboard(sb, availableProps = []) {
+  if (!Array.isArray(availableProps) || availableProps.length === 0) return [];
+  const scan = normalizePropMatchText([
+    sb.title,
+    sb.location,
+    sb.time,
+    sb.action,
+    sb.dialogue,
+    sb.narration,
+    sb.result,
+    sb.description,
+    sb.image_prompt,
+    sb.video_prompt,
+    sb.universal_segment_text,
+  ].filter(Boolean).join(' '));
+  if (!scan) return [];
+  const found = [];
+  for (const prop of availableProps) {
+    const id = Number(prop.id);
+    if (!Number.isFinite(id)) continue;
+    const aliases = [
+      ...propAliases(prop.name),
+      ...propAliases(prop.type),
+      ...propAliases(prop.description),
+    ];
+    if (aliases.some((a) => scan.includes(a))) found.push(id);
+  }
+  return Array.from(new Set(found));
+}
+
+function syncStoryboardPropsByText(db, log, episodeId = null) {
+  const where = episodeId ? 'WHERE s.episode_id = ? AND s.deleted_at IS NULL' : 'WHERE s.deleted_at IS NULL';
+  const params = episodeId ? [Number(episodeId)] : [];
+  const storyboards = db.prepare(
+    `SELECT s.id, s.episode_id, s.title, s.location, s.time, s.action, s.dialogue, s.narration,
+            s.result, s.description, s.image_prompt, s.video_prompt, s.universal_segment_text, e.drama_id
+     FROM storyboards s
+     JOIN episodes e ON e.id = s.episode_id
+     ${where}`
+  ).all(...params);
+  let linked = 0;
+  const propCache = new Map();
+  const ins = db.prepare('INSERT OR IGNORE INTO storyboard_props (storyboard_id, prop_id) VALUES (?, ?)');
+  const existingStmt = db.prepare('SELECT prop_id FROM storyboard_props WHERE storyboard_id = ?');
+  for (const sb of storyboards) {
+    if (!propCache.has(sb.drama_id)) {
+      propCache.set(sb.drama_id, db.prepare(
+        'SELECT id, name, type, description FROM props WHERE drama_id = ? AND deleted_at IS NULL'
+      ).all(sb.drama_id));
+    }
+    const existing = new Set(existingStmt.all(sb.id).map((r) => Number(r.prop_id)));
+    const inferred = inferPropIdsForStoryboard(sb, propCache.get(sb.drama_id));
+    for (const pid of inferred) {
+      if (existing.has(pid)) continue;
+      ins.run(sb.id, pid);
+      linked++;
+    }
+  }
+  if (linked && log?.info) log.info('[分镜道具补全] 已按文本补全道具关联', { episode_id: episodeId || null, linked });
+  return { linked };
 }
 
 /**
@@ -420,7 +500,9 @@ function deriveStoryboardFieldsFromAi(sb, style, videoRatio, opts = {}) {
   const videoPrompt = generateVideoPrompt(sbWithAngles, style, videoRatio);
   const sceneId = sb.scene_id != null ? Number(sb.scene_id) : null;
   const charactersJson = Array.isArray(sb.characters) ? JSON.stringify(sb.characters) : (sb.characters ? JSON.stringify([].concat(sb.characters)) : '[]');
-  const propIds = Array.isArray(sb.props) ? sb.props.map(Number).filter(Number.isFinite) : [];
+  const aiPropIds = Array.isArray(sb.props) ? sb.props.map(Number).filter(Number.isFinite) : [];
+  const inferredPropIds = inferPropIdsForStoryboard(sb, opts.availableProps || []);
+  const propIds = Array.from(new Set([...aiPropIds, ...inferredPropIds]));
   let universalSegmentText = '';
   if (sb.universal_segment_text != null && String(sb.universal_segment_text).trim()) {
     universalSegmentText = String(sb.universal_segment_text).trim().replace(/\r?\n/g, ' ');
@@ -849,6 +931,12 @@ async function processStoryboardGeneration(db, log, cfg, taskId, episodeId, mode
   const deriveOpts = {
     universalOmni: !!universalOmni,
     targetClipDuration: targetClipDurationSec != null && Number(targetClipDurationSec) > 0 ? Number(targetClipDurationSec) : null,
+    availableProps: db.prepare(
+      `SELECT p.id, p.name, p.type, p.description
+       FROM props p
+       JOIN episodes e ON e.drama_id = p.drama_id
+       WHERE e.id = ? AND p.deleted_at IS NULL`
+    ).all(episodeIdNum),
   };
   let streamThrottle = 0;
 
@@ -1603,6 +1691,7 @@ module.exports = {
   generateStoryboard,
   /** 与分镜入库时一致的「视频提示词」拼装（供经典模式润色等复用） */
   composeStoryboardVideoPrompt: generateVideoPrompt,
+  syncStoryboardPropsByText,
   rebuildVideoPromptForStoryboard,
   splitStoryboardByAudio,
 };

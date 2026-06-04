@@ -93,6 +93,7 @@ function inferProtocol(provider, model) {
   if (p === 'openrouter') return 'openrouter_image';
   if (p === 'dashscope' || p === 'qwen_image') return 'dashscope';
   if (p === 'nano_banana') return 'nano_banana';
+  if (p === 'kie_ai' || p === 'kie' || p === 'kieai') return 'kie_ai';
   if (p === 'gemini' || p === 'google') return 'gemini';
   if (p === 'volces' || p === 'volcengine' || p === 'volc') return 'volcengine';
   if (/seedream|doubao/i.test(model || '')) return 'volcengine';
@@ -775,6 +776,239 @@ async function callNanoBananaImageApi(config, log, opts) {
   return { error: 'NanoBanana 图片生成超时' };
 }
 
+function normalizeKieImageSize(size) {
+  if (!size || typeof size !== 'string') return '1:1';
+  const s = String(size).trim().toLowerCase().replace(/[×x*]/g, ':').replace(/\s+/g, '');
+  const ratioMap = {
+    '16:9': '16:9',
+    '9:16': '9:16',
+    '4:3': '4:3',
+    '3:4': '3:4',
+    '1:1': '1:1',
+    '21:9': '21:9',
+  };
+  if (ratioMap[s]) return ratioMap[s];
+  const m = String(size).trim().toLowerCase().match(/^(\d+)\s*[x*]\s*(\d+)$/);
+  if (!m) return '1:1';
+  const w = Number(m[1]);
+  const h = Number(m[2]);
+  if (!w || !h) return '1:1';
+  const r = w / h;
+  if (r >= 2.0) return '21:9';
+  if (r >= 1.55) return '16:9';
+  if (r >= 1.2) return '4:3';
+  if (r >= 0.85) return '1:1';
+  if (r >= 0.62) return '3:4';
+  return '9:16';
+}
+
+function resolveKieImageFileUrl(value, filesBaseUrl, storageLocalPath) {
+  if (!value || !String(value).trim()) return null;
+  const s = String(value).trim();
+  if (/^https?:\/\//i.test(s) && !/localhost|127\.0\.0\.1/i.test(s)) return s;
+  const baseUrl = (filesBaseUrl || '').replace(/\/$/, '');
+  if (!baseUrl || /localhost|127\.0\.0\.1/i.test(baseUrl)) {
+    const resolved = resolveImageRef(s, filesBaseUrl, storageLocalPath);
+    return resolved && /^https?:\/\//i.test(resolved) && !/localhost|127\.0\.0\.1/i.test(resolved) ? resolved : null;
+  }
+  if (/^https?:\/\//i.test(s)) {
+    const afterStatic = s.split('/static/')[1] || s.replace(/^https?:\/\/[^/]+\//, '');
+    return afterStatic ? baseUrl + '/' + afterStatic.replace(/^\//, '') : s;
+  }
+  return baseUrl + '/' + s.replace(/^\//, '');
+}
+
+function pickKieImageUrl(data) {
+  function parseJsonMaybe(value) {
+    if (!value || typeof value !== 'string') return null;
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (_) {
+      return null;
+    }
+  }
+  const resultJson = parseJsonMaybe(data?.data?.resultJson || data?.resultJson);
+  const responseJson = parseJsonMaybe(data?.data?.response || data?.response);
+  const candidates = [
+    data?.image_url,
+    data?.url,
+    data?.data?.image_url,
+    data?.data?.url,
+    resultJson?.resultUrls,
+    resultJson?.originUrls,
+    resultJson?.fullResultUrls,
+    resultJson?.images,
+    resultJson?.imageUrls,
+    resultJson?.url,
+    resultJson?.image_url,
+    responseJson?.resultUrls,
+    responseJson?.originUrls,
+    responseJson?.fullResultUrls,
+    responseJson?.images,
+    responseJson?.imageUrls,
+    responseJson?.url,
+    responseJson?.image_url,
+    data?.data?.response?.resultImageUrl,
+    data?.data?.response?.originImageUrl,
+    data?.data?.response?.resultUrls,
+    data?.data?.response?.originUrls,
+    data?.response?.resultUrls,
+    data?.response?.originUrls,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c) return c;
+    if (Array.isArray(c)) {
+      const found = c.find((x) => typeof x === 'string' && /^https?:\/\//i.test(x));
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function parseKieImageSettings(settings) {
+  if (!settings) return {};
+  try {
+    const parsed = typeof settings === 'string' ? JSON.parse(settings) : settings;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function normalizeKieNanoBananaResolution(value) {
+  const r = String(value || '1K').trim().toUpperCase();
+  return ['1K', '2K', '4K'].includes(r) ? r : '1K';
+}
+
+async function callKieAiImageApi(config, log, opts) {
+  const { prompt, model, size, image_gen_id, reference_image_urls, files_base_url, storage_local_path } = opts;
+  const base = (config.base_url || 'https://api.kie.ai').replace(/\/$/, '');
+  const modelName = String(model || config.default_model || '').trim() || 'gpt4o-image';
+  const isNanoBananaPro = modelName.toLowerCase() === 'nano-banana-pro';
+  let ep = isNanoBananaPro ? '/api/v1/jobs/createTask' : (config.endpoint || '/api/v1/gpt4o-image/generate');
+  if (!ep.startsWith('/')) ep = '/' + ep;
+  const submitUrl = base + ep;
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer ' + (config.api_key || ''),
+  };
+  const filesUrl = [];
+  const rawRefs = Array.isArray(reference_image_urls) ? reference_image_urls.filter(Boolean) : [];
+  for (const ref of rawRefs.slice(0, 10)) {
+    const publicUrl = resolveKieImageFileUrl(ref, files_base_url, storage_local_path);
+    if (publicUrl && !filesUrl.includes(publicUrl)) filesUrl.push(publicUrl);
+  }
+  const settings = parseKieImageSettings(config.settings);
+  const nanoResolution = normalizeKieNanoBananaResolution(settings.kie_nano_banana_pro?.resolution);
+  const body = isNanoBananaPro
+    ? {
+        model: 'nano-banana-pro',
+        input: {
+          prompt: String(prompt || '').trim(),
+          image_input: filesUrl,
+          aspect_ratio: normalizeKieImageSize(size),
+          resolution: nanoResolution,
+          output_format: 'png',
+        },
+      }
+    : {
+        prompt: String(prompt || '').trim(),
+        size: normalizeKieImageSize(size),
+        isEnhance: false,
+        uploadCn: false,
+        enableFallback: false,
+      };
+  if (!isNanoBananaPro && filesUrl.length > 0) body.filesUrl = filesUrl;
+
+  log.info('[Kie.ai图生] 提交任务', {
+    image_gen_id,
+    url: submitUrl,
+    model: modelName,
+    size: isNanoBananaPro ? body.input.aspect_ratio : body.size,
+    resolution: isNanoBananaPro ? body.input.resolution : undefined,
+    files_count: filesUrl.length,
+    prompt_len: isNanoBananaPro ? body.input.prompt.length : body.prompt.length,
+  });
+
+  const submitRes = await fetch(submitUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  const submitRaw = await submitRes.text();
+  if (!submitRes.ok) {
+    return { error: `Kie.ai 图片提交失败: ${submitRes.status} ${submitRaw.slice(0, 300)}` };
+  }
+  let submitData;
+  try {
+    submitData = JSON.parse(submitRaw);
+  } catch (e) {
+    return { error: 'Kie.ai 图片返回格式异常: ' + submitRaw.slice(0, 200) };
+  }
+  const directUrl = pickKieImageUrl(submitData);
+  if (directUrl) return { image_url: directUrl };
+  if (submitData.code != null && Number(submitData.code) !== 200 && Number(submitData.code) !== 0) {
+    return { error: String(submitData.msg || submitData.message || `Kie.ai code ${submitData.code}`).slice(0, 300) };
+  }
+  const taskId = submitData?.data?.taskId || submitData?.data?.task_id || submitData?.taskId || submitData?.task_id;
+  if (!taskId) {
+    return { error: 'Kie.ai 图片未返回 taskId: ' + submitRaw.slice(0, 300) };
+  }
+
+  const cfgQEp = isNanoBananaPro
+    ? '/api/v1/jobs/recordInfo'
+    : (config.query_endpoint
+        ? (config.query_endpoint.startsWith('/') ? config.query_endpoint : '/' + config.query_endpoint)
+        : '/api/v1/gpt4o-image/record-info');
+  function buildQueryUrl(tid) {
+    if (/\{(taskId|taskid|task_id|id)\}/i.test(cfgQEp)) {
+      return base + cfgQEp
+        .replace(/\{taskId\}/gi, encodeURIComponent(tid))
+        .replace(/\{task_id\}/gi, encodeURIComponent(tid))
+        .replace(/\{id\}/gi, encodeURIComponent(tid));
+    }
+    return base + cfgQEp + (cfgQEp.includes('?') ? '&' : '?') + 'taskId=' + encodeURIComponent(tid);
+  }
+
+  const maxAttempts = 80;
+  const intervalMs = 3000;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    const pollUrl = buildQueryUrl(taskId);
+    try {
+      const pollRes = await fetch(pollUrl, { method: 'GET', headers });
+      const pollRaw = await pollRes.text();
+      if (!pollRes.ok) {
+        log.warn('[Kie.ai图生] 轮询 HTTP 错误', { image_gen_id, task_id: taskId, attempt, status: pollRes.status, body: pollRaw.slice(0, 300) });
+        continue;
+      }
+      let pollData;
+      try {
+        pollData = JSON.parse(pollRaw);
+      } catch (_) {
+        log.warn('[Kie.ai图生] 轮询 JSON 异常', { image_gen_id, task_id: taskId, attempt, raw: pollRaw.slice(0, 300) });
+        continue;
+      }
+      const status = String(pollData?.data?.status || pollData?.data?.state || pollData?.status || pollData?.state || '').toUpperCase();
+      const successFlag = pollData?.data?.successFlag;
+      log.info('[Kie.ai图生] 轮询状态', { image_gen_id, task_id: taskId, attempt, status, successFlag });
+      if (status === 'SUCCESS' || status === 'SUCCEEDED' || status === 'COMPLETED' || successFlag === 1) {
+        const imageUrl = pickKieImageUrl(pollData);
+        if (imageUrl) return { image_url: imageUrl };
+        return { error: 'Kie.ai 图片成功但未返回图片 URL: ' + pollRaw.slice(0, 300) };
+      }
+      if (status.includes('FAILED') || status === 'FAIL' || status === 'ERROR' || successFlag === 2 || successFlag === 3) {
+        const errMsg = pollData?.data?.errorMessage || pollData?.data?.errorMsg || pollData?.msg || pollData?.message || '任务失败';
+        return { error: 'Kie.ai 图片生成失败: ' + String(errMsg).slice(0, 300) };
+      }
+    } catch (e) {
+      log.warn('[Kie.ai图生] 轮询请求失败', { image_gen_id, task_id: taskId, attempt, error: e.message });
+    }
+  }
+  return { error: 'Kie.ai 图片生成超时' };
+}
+
 // 通义千问 qwen-image 同步接口：仅支持单条 text，不支持参考图；parameters 仅 size/negative_prompt/prompt_extend/watermark
 function isQwenImageProvider(config, model) {
   const p = (config.provider || '').toLowerCase();
@@ -1446,6 +1680,15 @@ async function callImageApi(db, log, opts) {
     });
   }
 
+  if (protocol === 'kie_ai') {
+    return callKieAiImageApi(config, log, {
+      prompt: effectivePrompt, model, size, image_gen_id,
+      reference_image_urls: opts.reference_image_urls,
+      files_base_url: opts.files_base_url,
+      storage_local_path: opts.storage_local_path,
+    });
+  }
+
   if (protocol === 'kling') {
     return callKlingImageApi(config, log, {
       prompt: effectivePrompt, model, size, image_gen_id,
@@ -1801,15 +2044,14 @@ function createAndGenerateImage(db, log, opts) {
       taskService.updateTaskResult(db, taskId, { image_generation_id: imageGenId, image_url: result.image_url, local_path: localPath, status: 'completed' });
       if (charIdNum != null) {
         try {
-          // 旧图追加到 extra_images，与上传逻辑保持一致
+          // AI regenerate replaces the main image. Do not auto-append the old image to extra_images;
+          // otherwise resource cards show two images and users must manually delete history.
           const oldChar = db
             .prepare('SELECT local_path, image_url, extra_images, seedance2_asset FROM characters WHERE id = ?')
             .get(charIdNum);
-          const oldPath = oldChar?.local_path || oldChar?.image_url || '';
           let extras = [];
           try { extras = oldChar?.extra_images ? JSON.parse(oldChar.extra_images) : []; } catch (_) {}
           if (!Array.isArray(extras)) extras = [];
-          if (oldPath && !extras.includes(oldPath)) extras.push(oldPath);
           const extraJson = extras.length ? JSON.stringify(extras) : null;
           seedance2AssetGuards.markStaleOnCharacterMainImageDrift(db, log, { ...oldChar, id: charIdNum }, {
             image_url: result.image_url,
@@ -1833,13 +2075,11 @@ function createAndGenerateImage(db, log, opts) {
       }
       if (sceneIdNum != null) {
         try {
-          // 旧图追加到 extra_images，与上传逻辑保持一致
+          // AI regenerate replaces the main image. Keep existing manual extras, but do not add the old main image.
           const oldScene = db.prepare('SELECT local_path, image_url, extra_images FROM scenes WHERE id = ?').get(sceneIdNum);
-          const oldPath = oldScene?.local_path || oldScene?.image_url || '';
           let extras = [];
           try { extras = oldScene?.extra_images ? JSON.parse(oldScene.extra_images) : []; } catch (_) {}
           if (!Array.isArray(extras)) extras = [];
-          if (oldPath && !extras.includes(oldPath)) extras.push(oldPath);
           const extraJson = extras.length ? JSON.stringify(extras) : null;
           db.prepare('UPDATE scenes SET image_url = ?, local_path = ?, extra_images = ?, updated_at = ? WHERE id = ?').run(
             result.image_url,

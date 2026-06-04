@@ -16,5 +16,8 @@ export const generationAPI = {
   /** 根据故事梗概 + 风格/类型/集数 生成剧本，返回 { episodes: [{episode, title, content}] } */
   generateStory(body) {
     return request.post('/generation/story', body)
+  },
+  runPromptEngine(body) {
+    return request.post('/generation/prompt-engine', body)
   }
 }

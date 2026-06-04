@@ -1455,13 +1455,11 @@ async function processImageGeneration(db, log, imageGenId) {
     }
     
     if (row.scene_id != null && row.storyboard_id == null) {
-      // 旧图追加到 extra_images，与上传逻辑保持一致
+      // AI regenerate replaces the main scene image. Keep manual extras, but do not add the old main image.
       const oldScene = db.prepare('SELECT local_path, image_url, extra_images FROM scenes WHERE id = ?').get(row.scene_id);
-      const oldPath = oldScene?.local_path || oldScene?.image_url || '';
       let sceneExtras = [];
       try { sceneExtras = oldScene?.extra_images ? JSON.parse(oldScene.extra_images) : []; } catch (_) {}
       if (!Array.isArray(sceneExtras)) sceneExtras = [];
-      if (oldPath && !sceneExtras.includes(oldPath)) sceneExtras.push(oldPath);
       const sceneExtraJson = sceneExtras.length ? JSON.stringify(sceneExtras) : null;
       try {
         db.prepare("UPDATE scenes SET image_url = ?, local_path = ?, extra_images = ?, status = 'generated', updated_at = ? WHERE id = ?").run(

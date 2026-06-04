@@ -34,6 +34,10 @@ function routes(db, log) {
         }
         const model = body.model ?? null;
         const duration = body.duration ?? null;
+        const videoParams =
+          body.video_params && typeof body.video_params === 'object'
+            ? JSON.stringify(body.video_params)
+            : (typeof body.video_params === 'string' && body.video_params.trim() ? body.video_params : null);
         // 画幅：请求体归一化（全角冒号等）后写入 DB；未传则从 drama.metadata 读取并同样归一化
         let aspectRatio = null;
         if (body.aspect_ratio != null && String(body.aspect_ratio).trim() !== '') {
@@ -62,9 +66,9 @@ function routes(db, log) {
             ? JSON.stringify(body.reference_image_urls.slice(0, 10))
             : null;
         db.prepare(
-          `INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, model, duration, aspect_ratio, resolution, seed, camera_fixed, watermark, image_url, first_frame_url, last_frame_url, reference_image_urls, status, task_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?)`
-        ).run(dramaId, storyboardId, provider, prompt, model, duration, aspectRatio, resolution, seed, cameraFixed, watermark, imageUrl, firstFrameUrl, lastFrameUrl, refImagesJson, task.id, now, now);
+          `INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, model, duration, aspect_ratio, resolution, seed, camera_fixed, watermark, video_params, image_url, first_frame_url, last_frame_url, reference_image_urls, status, task_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?)`
+        ).run(dramaId, storyboardId, provider, prompt, model, duration, aspectRatio, resolution, seed, cameraFixed, watermark, videoParams, imageUrl, firstFrameUrl, lastFrameUrl, refImagesJson, task.id, now, now);
         const videoGenId = db.prepare('SELECT last_insert_rowid() as id').get().id;
         setImmediate(() => {
           videoService.processVideoGeneration(db, log, videoGenId);

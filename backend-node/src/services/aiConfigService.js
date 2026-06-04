@@ -104,7 +104,15 @@ function createConfig(db, log, req) {
         queryEndpoint = '/api/v1/nanobanana/record-info';
       }
     } else if (p === 'kie_ai' || p === 'kie' || p === 'kieai') {
-      if (st === 'video') {
+      if (st === 'image' || st === 'storyboard_image') {
+        const rawModel = [req.default_model, ...(Array.isArray(req.model) ? req.model : [req.model])]
+          .filter(Boolean)
+          .map((v) => String(v).toLowerCase())
+          .join('\n');
+        const isNanoBananaPro = /nano-banana-pro/.test(rawModel);
+        endpoint = isNanoBananaPro ? '/api/v1/jobs/createTask' : '/api/v1/gpt4o-image/generate';
+        queryEndpoint = isNanoBananaPro ? '/api/v1/jobs/recordInfo?taskId={taskId}' : '/api/v1/gpt4o-image/record-info?taskId={taskId}';
+      } else if (st === 'video') {
         const rawModel = [req.default_model, ...(Array.isArray(req.model) ? req.model : [req.model])]
           .filter(Boolean)
           .map((v) => String(v).toLowerCase())
@@ -268,6 +276,25 @@ async function testConnection(opts) {
     // 用 record-info 查询一个不存在的 taskId：401/403=key 无效，404=key 有效已联通
     const url = base + '/api/v1/nanobanana/record-info?taskId=test-connectivity';
     const res = await fetch(url, {
+      method: 'GET',
+      headers: { Authorization: 'Bearer ' + (opts.api_key || '') },
+    });
+    if (res.status === 401 || res.status === 403) {
+      const text = await res.text();
+      let errMsg = `API Key 无效 (${res.status})`;
+      try { const j = JSON.parse(text); errMsg = j.msg || j.message || errMsg; } catch {}
+      throw new Error(errMsg);
+    }
+    return;
+  }
+
+  // --- Kie.ai ---
+  if (provider === 'kie_ai' || provider === 'kie' || provider === 'kieai') {
+    const isKieImageService = serviceType === 'image' || serviceType === 'storyboard_image';
+    const probePath = isKieImageService
+      ? '/api/v1/gpt4o-image/record-info?taskId=test-connectivity'
+      : '/api/v1/jobs/recordInfo?taskId=test-connectivity';
+    const res = await fetch(base + probePath, {
       method: 'GET',
       headers: { Authorization: 'Bearer ' + (opts.api_key || '') },
     });

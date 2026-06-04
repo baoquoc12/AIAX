@@ -117,6 +117,13 @@ async function processPropExtraction(db, log, taskId, episodeId) {
     }
   }
 
+  try {
+    const { syncStoryboardPropsByText } = require('./episodeStoryboardService');
+    syncStoryboardPropsByText(db, log, episodeId);
+  } catch (e) {
+    log.warn('[提取道具] 分镜道具自动关联失败', { episode_id: episodeId, error: e.message });
+  }
+
   taskService.updateTaskResult(db, taskId, {
     props: createdProps,
     count: createdProps.length,

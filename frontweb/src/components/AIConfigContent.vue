@@ -328,7 +328,7 @@
             <el-option label="Vidu 视频" value="vidu" />
             <el-option label="可灵 Omni-Video（官方 api-beijing / ffir 中转，O1 全能）" value="kling_omni" />
             <el-option label="xAI Grok Imagine（官方 prompt + aspect_ratio，/v1/videos/generations）" value="xai" />
-            <el-option label="Kie.ai 视频任务（Bearer，createTask/recordInfo）" value="kie_ai" />
+            <el-option label="Kie.ai 图片/视频任务（Bearer）" value="kie_ai" />
             <el-option label="NanoBanana" value="nano_banana" />
           </el-select>
         </el-form-item>
@@ -787,6 +787,71 @@ input_reference = (图片文件，可选)</pre>
           </el-select>
           <p class="field-tip">该配置被选为「默认」时，生成故事/图片/视频将使用此处指定的模型。</p>
         </el-form-item>
+        <div v-if="showKieVeo31Settings" class="kie-veo31-settings">
+          <div class="kie-veo31-head">
+            <strong>KIE / Veo 3.1 mặc định</strong>
+            <span>Luồng này chỉ dùng Image to Video. Các option khác sẽ ẩn theo model variant.</span>
+          </div>
+          <el-row :gutter="12">
+            <el-col :span="24">
+              <el-form-item label="Model variant">
+                <el-select v-model="form.kie_veo31.model" style="width:100%">
+                  <el-option v-for="preset in KIE_VEO31_MODEL_PRESETS" :key="preset.value" :label="preset.label" :value="preset.value" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="12">
+            <el-col :span="24">
+              <el-form-item label="Resolution">
+                <el-select v-model="form.kie_veo31.resolution" style="width:100%">
+                  <el-option v-for="r in kieVeo31Preset.resolutions" :key="r" :label="r" :value="r" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="24">
+              <el-form-item label="Duration">
+                <el-select v-model="form.kie_veo31.duration" style="width:100%">
+                  <el-option v-for="d in kieVeo31Preset.durations" :key="d" :label="`${d}s`" :value="d" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="12">
+            <el-col :span="24">
+              <el-form-item label="Watermark">
+                <el-input v-model="form.kie_veo31.watermark" maxlength="200" show-word-limit placeholder="Tuỳ chọn, ví dụ tên brand" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="Translation">
+                <el-switch v-model="form.kie_veo31.enableTranslation" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="Fallback">
+                <el-switch v-model="form.kie_veo31.enableFallback" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </div>
+        <div v-if="showKieNanoBananaProSettings" class="kie-veo31-settings">
+          <div class="kie-veo31-head">
+            <strong>KIE / Nano Banana Pro</strong>
+            <span>Aspect ratio lấy theo New Project hoặc one-click. Output format luôn là PNG.</span>
+          </div>
+          <el-row :gutter="12">
+            <el-col :span="24">
+              <el-form-item label="Resolution">
+                <el-select v-model="form.kie_nano_banana_pro.resolution" style="width:100%">
+                  <el-option label="1K" value="1K" />
+                  <el-option label="2K" value="2K" />
+                  <el-option label="4K" value="4K" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </div>
         <el-form-item v-if="isDeepSeekOfficialForm">
           <template #label>
             <span class="form-label-tip">思考模式
@@ -1047,6 +1112,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, MagicStick, QuestionFilled, Download, Upload, Delete, ChatDotRound, Picture, Film, VideoCamera, Key, Microphone } from '@element-plus/icons-vue'
 import { aiAPI } from '@/api/ai'
 import { generationSettingsAPI } from '@/api/prompts'
+import {
+  KIE_VEO31_MODEL_PRESETS,
+  DEFAULT_KIE_VEO31_OPTIONS,
+  getKieVeo31Preset,
+  isKieVeo31Model,
+  normalizeKieVeo31Options,
+} from '@/constants/videoModelCapabilities'
 import PromptEditor from '@/components/PromptEditor.vue'
 import SceneModelMap from '@/components/SceneModelMap.vue'
 import Sd2AssetManagement from '@/components/Sd2AssetManagement.vue'
@@ -1132,6 +1204,8 @@ const form = ref({
   default_model: '',
   deepseek_thinking: 'disabled',
   deepseek_reasoning_effort: 'high',
+  kie_veo31: { ...DEFAULT_KIE_VEO31_OPTIONS },
+  kie_nano_banana_pro: { resolution: '1K' },
   priority: 0,
   is_default: false,
   // 可灵 Omni 官方 AK/SK（存 settings，后端生成 JWT）
@@ -1145,6 +1219,17 @@ const form = ref({
 const presetModelPick = ref('')
 
 const formModelList = computed(() => parseModelText(form.value.modelText))
+const kieVeo31Preset = computed(() => getKieVeo31Preset(form.value.kie_veo31?.model || form.value.default_model))
+const showKieVeo31Settings = computed(() => (
+  form.value.service_type === 'video'
+  && form.value.api_protocol === 'kie_ai'
+  && isKieVeo31Model(form.value.default_model)
+))
+const showKieNanoBananaProSettings = computed(() => (
+  (form.value.service_type === 'image' || form.value.service_type === 'storyboard_image')
+  && form.value.api_protocol === 'kie_ai'
+  && String(form.value.default_model || '').trim().toLowerCase() === 'nano-banana-pro'
+))
 
 // 保证「生成时默认使用」下拉有可选且选中值在列表内，否则会不显示或修改无效
 watch(
@@ -1158,6 +1243,38 @@ watch(
     }
   },
   { immediate: true }
+)
+
+watch(
+  () => form.value.kie_veo31?.model,
+  (model) => {
+    if (!model || !showKieVeo31Settings.value) return
+    const normalized = normalizeKieVeo31Options({ ...form.value.kie_veo31, model })
+    form.value.kie_veo31 = normalized
+    const list = parseModelText(form.value.modelText)
+    if (!list.includes(normalized.model)) {
+      form.value.modelText = [...list, normalized.model].join('\n')
+    }
+    form.value.default_model = normalized.model
+  }
+)
+
+watch(
+  () => form.value.default_model,
+  (model) => {
+    if (showKieVeo31Settings.value) {
+      form.value.kie_veo31 = normalizeKieVeo31Options({
+        ...form.value.kie_veo31,
+        model,
+      })
+      return
+    }
+    if (form.value.api_protocol === 'kie_ai' && (form.value.service_type === 'image' || form.value.service_type === 'storyboard_image')) {
+      const isNano = String(model || '').trim().toLowerCase() === 'nano-banana-pro'
+      form.value.endpoint = isNano ? '/api/v1/jobs/createTask' : '/api/v1/gpt4o-image/generate'
+      form.value.query_endpoint = isNano ? '/api/v1/jobs/recordInfo?taskId={taskId}' : '/api/v1/gpt4o-image/record-info?taskId={taskId}'
+    }
+  }
 )
 
 function onServiceTypeChange() {
@@ -1250,6 +1367,7 @@ const providerConfigs = {
   ],
   image: [
     { id: 'openrouter', name: 'OpenRouter', models: ['google/gemini-2.5-flash-image', 'openai/gpt-5.4-image-2', 'openai/gpt-5-image', 'x-ai/grok-imagine-image-quality', 'recraft/recraft-v4-vector'] },
+    { id: 'kie_ai', name: 'Kie.ai', models: ['nano-banana-pro', 'gpt4o-image'] },
     { id: 'volcengine', name: '火山引擎', models: ['doubao-seedream-4-5-251128', 'doubao-seedream-4-0-250828'] },
     { id: 'kling', name: '可灵 Kling', models: ['kling-image', 'kling-omni-image'] },
     { id: 'nano_banana', name: 'NanoBanana', models: ['nano-banana-2', 'nano-banana-pro', 'nano-banana'] },
@@ -1261,6 +1379,7 @@ const providerConfigs = {
   ],
   storyboard_image: [
     { id: 'openrouter', name: 'OpenRouter', models: ['google/gemini-2.5-flash-image', 'openai/gpt-5.4-image-2', 'openai/gpt-5-image', 'x-ai/grok-imagine-image-quality', 'recraft/recraft-v4-vector'] },
+    { id: 'kie_ai', name: 'Kie.ai', models: ['nano-banana-pro', 'gpt4o-image'] },
     { id: 'dashscope', name: '通义万象', models: ['wan2.6-image', 'qwen-image-edit-plus-2026-01-09', 'qwen-image-edit-plus', 'qwen-image-edit-max'] },
     { id: 'volcengine', name: '火山引擎', models: ['doubao-seedream-4-5-251128', 'doubao-seedream-4-0-250828'] },
     { id: 'kling', name: '可灵 Kling', models: ['kling-image', 'kling-omni-image'] },
@@ -1293,7 +1412,7 @@ const providerConfigs = {
     },
     { id: 'openai', name: 'OpenAI', models: ['sora-2', 'sora-2-pro'] },
     { id: 'xai', name: 'xAI Grok Imagine', models: ['grok-imagine-video'] },
-    { id: 'kie_ai', name: 'Kie.ai', models: ['bytedance/seedance-2', 'bytedance/seedance-2-fast', 'bytedance/seedance-1.5-pro', 'veo3_fast', 'veo3', 'veo3_quality', 'kling-v3', 'wan/wan-2.7-t2v'] },
+    { id: 'kie_ai', name: 'Kie.ai', models: ['bytedance/seedance-2', 'bytedance/seedance-2-fast', 'bytedance/seedance-1.5-pro', 'veo3_lite', 'veo3_fast', 'veo3', 'veo3_quality', 'kling-v3', 'wan/wan-2.7-t2v'] },
   ],
   tts: [
     { id: 'minimax', name: 'MiniMax T2A', models: ['speech-02-hd', 'speech-02-turbo'] },
@@ -1461,6 +1580,9 @@ const endpointPreviewInfo = computed(() => {
       return { submit: base + submitPath, query: null, isAuto: true, isGemini: true }
     } else if (proto === 'nano_banana' || p === 'nano_banana') {
       submitPath = '/v1/images/generations'  // nano_banana base_url 无 /v1
+    } else if (proto === 'kie_ai' || p === 'kie_ai') {
+      const isNanoBananaPro = String(form.value.default_model || '').trim().toLowerCase() === 'nano-banana-pro'
+      submitPath = isNanoBananaPro ? '/api/v1/jobs/createTask' : '/api/v1/gpt4o-image/generate'
     } else if (proto === 'kling' || p === 'kling' || p === 'klingai') {
       submitPath = '/v1/images/generations'
     } else {
@@ -1594,6 +1716,12 @@ function onProviderChange(providerId) {
     form.value.endpoint = ''
     form.value.query_endpoint = ''
   }
+  if (st === 'video' && providerId === 'kie_ai' && isKieVeo31Model(form.value.default_model)) {
+    form.value.kie_veo31 = normalizeKieVeo31Options({ ...DEFAULT_KIE_VEO31_OPTIONS, model: form.value.default_model })
+  }
+  if ((st === 'image' || st === 'storyboard_image') && providerId === 'kie_ai') {
+    form.value.kie_nano_banana_pro = { resolution: '1K' }
+  }
   if (st === 'video' && (providerId === 'ffir' || providerId === 'klingai')) {
     if (providerId === 'ffir') {
       form.value.endpoint = '/kling/v1/videos/omni-video'
@@ -1672,6 +1800,8 @@ function resetForm() {
     default_model: '',
     deepseek_thinking: 'disabled',
     deepseek_reasoning_effort: 'high',
+    kie_veo31: { ...DEFAULT_KIE_VEO31_OPTIONS },
+    kie_nano_banana_pro: { resolution: '1K' },
     priority: 0,
     is_default: true,  // 新增时默认勾选「设为默认」，便于理解当前会使用哪条配置
     voice_id: '',
@@ -1699,6 +1829,8 @@ function openEdit(row) {
   let kling_access_key = ''
   let kling_secret_key = ''
   let kling_secret_key_base64 = false
+  let kie_veo31 = normalizeKieVeo31Options({ ...DEFAULT_KIE_VEO31_OPTIONS, model: row.default_model || modelList[0] })
+  let kie_nano_banana_pro = { resolution: '1K' }
   const deepseekSettings = resolveDeepSeekFormSettings(row)
   if (row.settings) {
     try {
@@ -1711,6 +1843,17 @@ function openEdit(row) {
         kling_access_key = s.kling_access_key || ''
         kling_secret_key = s.kling_secret_key || ''
         kling_secret_key_base64 = !!s.kling_secret_key_base64
+      }
+      if (row.service_type === 'video' && row.api_protocol === 'kie_ai') {
+        kie_veo31 = normalizeKieVeo31Options({
+          ...DEFAULT_KIE_VEO31_OPTIONS,
+          model: row.default_model || modelList[0],
+          ...(s.kie_veo31 || {}),
+        })
+      }
+      if ((row.service_type === 'image' || row.service_type === 'storyboard_image') && row.api_protocol === 'kie_ai') {
+        const res = String(s.kie_nano_banana_pro?.resolution || '1K').toUpperCase()
+        kie_nano_banana_pro = { resolution: ['1K', '2K', '4K'].includes(res) ? res : '1K' }
       }
     } catch (_) {}
   }
@@ -1727,6 +1870,8 @@ function openEdit(row) {
     default_model: defaultInList ? row.default_model : (modelList[0] || ''),
     deepseek_thinking: deepseekSettings.thinking,
     deepseek_reasoning_effort: deepseekSettings.effort,
+    kie_veo31,
+    kie_nano_banana_pro,
     priority: row.priority ?? 0,
     is_default: !!row.is_default,
     voice_id,
@@ -1772,6 +1917,23 @@ async function submit() {
       else delete baseS.kling_secret_key
       if (form.value.kling_secret_key_base64) baseS.kling_secret_key_base64 = true
       else delete baseS.kling_secret_key_base64
+      settings = Object.keys(baseS).length ? JSON.stringify(baseS) : null
+    } else if (showKieVeo31Settings.value) {
+      const prev = editingId.value ? list.value.find((r) => r.id === editingId.value) : null
+      const baseS = parseSettings(prev?.settings)
+      const veoSettings = normalizeKieVeo31Options({
+        ...form.value.kie_veo31,
+        model: defaultModel || form.value.kie_veo31?.model,
+      })
+      delete veoSettings.aspectRatio
+      delete veoSettings.aspect_ratio
+      baseS.kie_veo31 = veoSettings
+      settings = Object.keys(baseS).length ? JSON.stringify(baseS) : null
+    } else if (showKieNanoBananaProSettings.value) {
+      const prev = editingId.value ? list.value.find((r) => r.id === editingId.value) : null
+      const baseS = parseSettings(prev?.settings)
+      const res = String(form.value.kie_nano_banana_pro?.resolution || '1K').toUpperCase()
+      baseS.kie_nano_banana_pro = { resolution: ['1K', '2K', '4K'].includes(res) ? res : '1K' }
       settings = Object.keys(baseS).length ? JSON.stringify(baseS) : null
     } else if (isDeepSeekOfficialForm.value) {
       const prev = editingId.value ? list.value.find((r) => r.id === editingId.value) : null
@@ -2307,6 +2469,33 @@ code {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+.kie-veo31-settings {
+  margin: 6px 0 16px 100px;
+  padding: 14px 14px 2px;
+  border: 1px solid #ddd6fe;
+  border-radius: 8px;
+  background: #faf7ff;
+}
+.kie-veo31-settings :deep(.el-form-item__label) {
+  width: 96px !important;
+  justify-content: flex-start;
+}
+.kie-veo31-settings :deep(.el-form-item__content) {
+  min-width: 0;
+}
+.kie-veo31-head {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) 1fr;
+  gap: 10px;
+  align-items: start;
+  margin-bottom: 12px;
+  color: #2f235f;
+}
+.kie-veo31-head span {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.35;
 }
 .field-tip {
   margin: 6px 0 0;

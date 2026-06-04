@@ -21,6 +21,8 @@ const assetRoutes = require('./assets');
 const audioRoutes = require('./audio');
 const promptOverridesRoutes = require('./promptOverrides');
 const sceneModelMapRoutes = require('./sceneModelMap');
+const pipelineStepRoutes = require('./pipelineSteps');
+const scriptDocumentRoutes = require('./scriptDocuments');
 
 function setupRouter(cfg, db, log) {
   const r = express.Router();
@@ -47,6 +49,8 @@ function setupRouter(cfg, db, log) {
   const assets = assetRoutes(db, log);
   const audio = audioRoutes(db, log, cfg);
   const promptOverrides = promptOverridesRoutes.routes(db, log);
+  const pipelineSteps = pipelineStepRoutes(db, log);
+  const scriptDocuments = scriptDocumentRoutes(db, log);
 
   // ---------- dramas ----------
   r.get('/dramas', drama.listDramas);
@@ -84,6 +88,12 @@ function setupRouter(cfg, db, log) {
   r.put('/dramas/:id/characters', drama.saveCharacters);
   r.put('/dramas/:id/episodes', drama.saveEpisodes);
   r.put('/dramas/:id/progress', drama.saveProgress);
+  r.get('/dramas/:id/pipeline-steps', pipelineSteps.list);
+  r.put('/dramas/:id/pipeline-steps/:step_key', pipelineSteps.upsert);
+  r.get('/dramas/:id/script-documents', scriptDocuments.list);
+  r.get('/dramas/:id/script-documents/latest', scriptDocuments.latest);
+  r.post('/dramas/:id/script-documents', scriptDocuments.create);
+  r.put('/script-documents/:doc_id', scriptDocuments.update);
   r.get('/dramas/:id/props', drama.listProps);
   r.get('/dramas/:id', drama.getDrama);
   r.put('/dramas/:id', drama.updateDrama);
@@ -130,6 +140,20 @@ function setupRouter(cfg, db, log) {
         return response.badRequest(res, err.message);
       }
       response.internalError(res, err.message || '故事生成失败');
+    }
+  });
+
+  r.post('/generation/prompt-engine', async (req, res) => {
+    const promptEngineService = require('../services/promptEngineService');
+    try {
+      const result = await promptEngineService.runPromptEngine(db, log, req.body || {});
+      response.success(res, result);
+    } catch (err) {
+      log.error('generation/prompt-engine', { error: err.message });
+      if (err.message && err.message.includes('未配置')) {
+        return response.badRequest(res, err.message);
+      }
+      response.internalError(res, err.message || 'Prompt Engine chạy thất bại');
     }
   });
 

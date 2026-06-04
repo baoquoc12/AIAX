@@ -120,13 +120,11 @@ async function processPropImageGeneration(db, log, taskId, propId, opts) {
   } catch (_) {}
 
   const now = new Date().toISOString();
-  // 旧图追加到 extra_images，与上传逻辑保持一致
+  // AI regenerate replaces the main prop image. Keep manually managed extras, but do not add the old main image.
   const oldProp = db.prepare('SELECT local_path, image_url, extra_images FROM props WHERE id = ?').get(propId);
-  const oldPath = oldProp?.local_path || oldProp?.image_url || '';
   let extras = [];
   try { extras = oldProp?.extra_images ? JSON.parse(oldProp.extra_images) : []; } catch (_) {}
   if (!Array.isArray(extras)) extras = [];
-  if (oldPath && !extras.includes(oldPath)) extras.push(oldPath);
   const extraJson = extras.length ? JSON.stringify(extras) : null;
   try {
     db.prepare(

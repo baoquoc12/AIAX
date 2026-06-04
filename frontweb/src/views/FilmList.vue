@@ -20,6 +20,9 @@
         </div>
         <!-- 右侧操作区 -->
         <div class="header-actions">
+          <el-button class="btn-workflow" title="Quy trình sản xuất AIAX" @click="$router.push('/workflow')">
+            <el-icon><Guide /></el-icon>Quy trình
+          </el-button>
           <!-- 暂时隐藏，功能待完善 -->
           <!-- <el-button class="btn-library" title="自由创作" @click="$router.push('/free-create')">
             <el-icon><MagicStick /></el-icon>自由创作
@@ -62,6 +65,9 @@
                 <el-button size="large" class="action-btn action-btn-import" :loading="importing" @click="triggerImport">
                   <el-icon><Upload /></el-icon>导入短剧项目
                 </el-button>
+                <el-button size="large" class="action-btn action-btn-workflow" @click="$router.push('/workflow')">
+                  <el-icon><Guide /></el-icon>Quy trình AIAX
+                </el-button>
               </div>
               <div v-if="exampleList.length > 0" class="action-card-example">
                 <div class="example-hint">
@@ -90,6 +96,8 @@
             @click="openProject(d.id)"
           >
             <div class="project-card-actions" @click.stop>
+              <el-button size="small" circle :icon="MagicStick" title="Prompt Engine" @click="$router.push('/prompt-engine/' + d.id)" />
+              <el-button size="small" circle :icon="Guide" title="Pipeline sản xuất" @click="$router.push('/pipeline/' + d.id)" />
               <el-button size="small" circle :icon="Download" title="导出项目" :loading="exportingId === d.id" @click="onExport(d)" />
               <el-button size="small" circle :icon="Edit" title="编辑" @click="openEditDialog(d)" />
               <el-button size="small" type="danger" plain circle :icon="Delete" title="删除" @click="onDelete(d)" />
@@ -357,7 +365,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { currentLanguage } from '@/i18n/runtime'
-import { Edit, Delete, Setting, Plus, User, PictureFilled, Box, Sunny, Moon, ChatDotSquare, Download, Upload, QuestionFilled, FolderOpened, MagicStick, Files } from '@element-plus/icons-vue'
+import { Edit, Delete, Setting, Plus, User, PictureFilled, Box, Sunny, Moon, ChatDotSquare, Download, Upload, QuestionFilled, FolderOpened, MagicStick, Files, Guide } from '@element-plus/icons-vue'
 import { useTheme } from '@/composables/useTheme'
 import { dramaAPI } from '@/api/drama'
 import { characterLibraryAPI } from '@/api/characterLibrary'
@@ -994,6 +1002,23 @@ html.light .btn-import {
   --el-button-hover-border-color: #9ca3af;
 }
 
+.btn-workflow {
+  --el-button-bg-color: rgba(20, 184, 166, 0.1);
+  --el-button-border-color: rgba(20, 184, 166, 0.35);
+  --el-button-text-color: #5eead4;
+  --el-button-hover-bg-color: rgba(20, 184, 166, 0.2);
+  --el-button-hover-border-color: rgba(20, 184, 166, 0.55);
+  --el-button-hover-text-color: #99f6e4;
+}
+html.light .btn-workflow {
+  --el-button-bg-color: rgba(15, 118, 110, 0.08);
+  --el-button-border-color: rgba(15, 118, 110, 0.32);
+  --el-button-text-color: #0f766e;
+  --el-button-hover-bg-color: rgba(15, 118, 110, 0.14);
+  --el-button-hover-border-color: rgba(15, 118, 110, 0.5);
+  --el-button-hover-text-color: #115e59;
+}
+
 .main {
   max-width: min(1400px, 96vw);
   margin: 0 auto;
@@ -1083,6 +1108,7 @@ html.light .btn-import {
 }
 .action-card-buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   width: 100%;
   justify-content: center;
@@ -1100,6 +1126,14 @@ html.light .btn-import {
   --el-button-hover-bg-color: rgba(99, 102, 241, 0.22);
   --el-button-hover-border-color: rgba(99, 102, 241, 0.55);
   --el-button-hover-text-color: #c7d2fe;
+}
+.action-btn-workflow {
+  --el-button-bg-color: rgba(20, 184, 166, 0.12);
+  --el-button-border-color: rgba(20, 184, 166, 0.36);
+  --el-button-text-color: #5eead4;
+  --el-button-hover-bg-color: rgba(20, 184, 166, 0.2);
+  --el-button-hover-border-color: rgba(20, 184, 166, 0.56);
+  --el-button-hover-text-color: #99f6e4;
 }
 .action-card-example {
   width: 100%;

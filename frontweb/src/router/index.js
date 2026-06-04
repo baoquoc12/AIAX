@@ -29,6 +29,24 @@ const router = createRouter({
       meta: { title: 'AI 配置' }
     },
     {
+      path: '/workflow',
+      name: 'workflow',
+      component: () => import('@/views/ProductionWorkflow.vue'),
+      meta: { title: 'Quy trình sản xuất AIAX' }
+    },
+    {
+      path: '/pipeline/:id',
+      name: 'pipeline',
+      component: () => import('@/views/PipelinePage.vue'),
+      meta: { title: 'Pipeline sản xuất AIAX' }
+    },
+    {
+      path: '/prompt-engine/:id',
+      name: 'prompt-engine',
+      component: () => import('@/views/PromptEnginePage.vue'),
+      meta: { title: 'Prompt Engine AIAX' }
+    },
+    {
       path: '/free-create',
       name: 'free-create',
       component: () => import('@/views/FreeCreate.vue'),

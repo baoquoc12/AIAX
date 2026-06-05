@@ -46,3 +46,4 @@ cd frontweb && npm run build
 ### GitHub Commit/Push Rule
 
 - Only commit or push to GitHub when Bao Quoc explicitly requests it. Do not commit new files, code changes, or configuration changes without a clear request to commit/push.
+- GitHub account note: `baoquoc0512x` is the AIAX/team GitHub account for `q-nexdor/aiax-lab`; `baoquoc12` is Bao Quoc's personal GitHub account and old backup remote.

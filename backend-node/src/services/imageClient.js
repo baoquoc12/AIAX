@@ -802,12 +802,24 @@ function normalizeKieImageSize(size) {
   return '9:16';
 }
 
-function resolveKieImageFileUrl(value, filesBaseUrl, storageLocalPath) {
+async function resolveKieImageFileUrl(value, filesBaseUrl, storageLocalPath, log, tag) {
   if (!value || !String(value).trim()) return null;
   const s = String(value).trim();
   if (/^https?:\/\//i.test(s) && !/localhost|127\.0\.0\.1/i.test(s)) return s;
   const baseUrl = (filesBaseUrl || '').replace(/\/$/, '');
+  if (/^data:image\//i.test(s)) {
+    try {
+      const m = s.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+      if (!m) return null;
+      const url = await uploadService.uploadToImageProxy(Buffer.from(m[2], 'base64'), m[1], log, tag);
+      return url && /^https?:\/\//i.test(url) ? url : null;
+    } catch (_) {
+      return null;
+    }
+  }
   if (!baseUrl || /localhost|127\.0\.0\.1/i.test(baseUrl)) {
+    const uploaded = await uploadService.uploadLocalImageToProxy(storageLocalPath, s, log, tag);
+    if (uploaded && /^https?:\/\//i.test(uploaded) && !/localhost|127\.0\.0\.1/i.test(uploaded)) return uploaded;
     const resolved = resolveImageRef(s, filesBaseUrl, storageLocalPath);
     return resolved && /^https?:\/\//i.test(resolved) && !/localhost|127\.0\.0\.1/i.test(resolved) ? resolved : null;
   }
@@ -895,9 +907,13 @@ async function callKieAiImageApi(config, log, opts) {
   };
   const filesUrl = [];
   const rawRefs = Array.isArray(reference_image_urls) ? reference_image_urls.filter(Boolean) : [];
-  for (const ref of rawRefs.slice(0, 10)) {
-    const publicUrl = resolveKieImageFileUrl(ref, files_base_url, storage_local_path);
+  for (let i = 0; i < rawRefs.slice(0, 10).length; i++) {
+    const ref = rawRefs[i];
+    const publicUrl = await resolveKieImageFileUrl(ref, files_base_url, storage_local_path, log, `kie_img_${image_gen_id || 'ref'}_${i + 1}`);
     if (publicUrl && !filesUrl.includes(publicUrl)) filesUrl.push(publicUrl);
+  }
+  if (isNanoBananaPro && rawRefs.length > 0 && filesUrl.length === 0) {
+    return { error: 'Kie.ai Nano Banana Pro cần reference image URL public nhưng ảnh local chưa upload/resolve được. Kiểm tra image proxy hoặc cấu hình FILES_BASE_URL.' };
   }
   const settings = parseKieImageSettings(config.settings);
   const nanoResolution = normalizeKieNanoBananaResolution(settings.kie_nano_banana_pro?.resolution);
